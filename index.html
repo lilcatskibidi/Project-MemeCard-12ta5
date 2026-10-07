@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Hắc Hợi Phong TCG — Pokémon Battle 2D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Be+Vietnam+Pro:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<!-- THỨ TỰ LOAD QUAN TRỌNG: config -> assets -> cards -> render -> game -->
+<script src="config.js"></script>
+<script src="assets.js"></script>
+<script src="cards.js"></script>
+<script src="render.js"></script>
+<style>
+/* ... GIỮ NGUYÊN CSS CŨ ... */
+:root{
+    --bg1:#0a0e24; --bg2:#141a3d;
+    --panel:#121838; --panel2:#1b2350;
+    --line:#2c3875;
+    --txt:#eef1ff; --dim:#9aa3d0;
+    --gold:#ffd75f; --red:#ff4d6d; --green:#4ade80; --blue:#4aa8ff;
+    --card-w: 244px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+    font-family:'Be Vietnam Pro','Segoe UI',sans-serif;
+    background:
+        radial-gradient(1200px 600px at 20% -10%, #24306e 0%, transparent 60%),
+        radial-gradient(900px 500px at 100% 100%, #3a1a54 0%, transparent 55%),
+        linear-gradient(160deg,var(--bg1),var(--bg2));
+    color:var(--txt); min-height:100vh; overflow-x:hidden;
+}
+h1,h2,h3,.display{font-family:'Baloo 2',cursive, sans-serif;letter-spacing:.5px}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+.screen{display:none;min-height:100vh;width:100%}
+.screen.active{display:flex;flex-direction:column;animation:screenIn .45s ease both}
+@keyframes screenIn{from{opacity:0;transform:translateY(14px) scale(.99)}to{opacity:1;transform:none}}
+
+#fx-layer{position:fixed;inset:0;pointer-events:none;z-index:999}
+#fx-layer .flash{position:absolute;inset:0;opacity:0;background:#fff}
+
+#screen-lobby{align-items:center;justify-content:center;gap:26px;padding:30px 18px;position:relative;overflow:hidden}
+.orb{position:absolute;border-radius:50%;filter:blur(60px);opacity:.35;animation:float 9s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-30px)}}
+.logo-box{text-align:center;position:relative;z-index:2}
+.logo-box .kicker{font-size:.78rem;letter-spacing:6px;color:var(--gold);text-transform:uppercase}
+.logo-title{
+    font-family:'Baloo 2';font-weight:800;font-size:clamp(2.6rem,8vw,4.6rem);line-height:1;
+    background:linear-gradient(180deg,#fff 15%,#ffd75f 55%,#ff9b21 90%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    text-shadow:0 6px 0 rgba(0,0,0,.35);margin:6px 0;
+}
+.logo-sub{color:var(--dim);font-size:.95rem}
+.cards-fan{display:flex;justify-content:center;gap:0;margin:6px 0 0;height:150px;perspective:900px}
+.cards-fan .pcard{margin:0 -34px;transform-origin:bottom center;transition:transform .4s}
+.cards-fan .pcard:nth-child(1){transform:rotate(-14deg) translateY(10px)}
+.cards-fan .pcard:nth-child(2){transform:rotate(0deg) translateY(-8px);z-index:3}
+.cards-fan .pcard:nth-child(3){transform:rotate(14deg) translateY(10px)}
+.cards-fan .pcard:hover{transform:rotate(0) translateY(-18px) scale(1.05);z-index:5}
+.menu{display:flex;flex-direction:column;gap:12px;width:min(400px,92vw);position:relative;z-index:2}
+.menu-btn{
+    display:flex;align-items:center;justify-content:center;gap:10px;
+    padding:16px 18px;border-radius:14px;font-weight:800;font-size:1.02rem;
+    background:linear-gradient(180deg,#232c66,#161d4a);border:2px solid var(--line);
+    box-shadow:0 6px 0 #0a0f2c, 0 12px 24px rgba(0,0,0,.35);transition:.15s;
+}
+.menu-btn:hover{transform:translateY(-3px);border-color:#5a6bff;box-shadow:0 9px 0 #0a0f2c,0 16px 28px rgba(0,0,0,.4)}
+.menu-btn:active{transform:translateY(3px);box-shadow:0 2px 0 #0a0f2c}
+.menu-btn.primary{background:linear-gradient(180deg,#ff6b3d,#e11d48);border-color:#ff9b7a;box-shadow:0 6px 0 #6a0f22,0 12px 24px rgba(255,60,90,.35)}
+.join-row{display:flex;gap:8px}
+.join-row input{
+    flex:1;padding:14px;border-radius:12px;border:2px solid var(--line);background:#0c1130;color:#fff;
+    text-align:center;letter-spacing:5px;font-weight:800;font-size:1.1rem;text-transform:uppercase;
+}
+.join-row input:focus{outline:none;border-color:#5a6bff}
+#room-id-container{display:none;flex-direction:column;align-items:center;gap:8px;background:rgba(0,0,0,.45);border:1px solid var(--line);padding:14px 22px;border-radius:14px}
+#room-id-display{font-family:'Baloo 2';font-size:2.4rem;font-weight:800;color:var(--gold);letter-spacing:8px}
+#copy-btn{background:var(--panel2);border:1px solid var(--line);padding:7px 16px;border-radius:8px;font-size:.85rem;font-weight:700}
+#copy-btn.copied{background:var(--green);color:#04240f;border-color:var(--green)}
+#status-text{color:var(--dim);font-size:.85rem;min-height:1.2em}
+.hint{font-size:.75rem;color:#6f78ad;max-width:420px;text-align:center;line-height:1.6}
+
+.pcard{
+    width:var(--card-w); aspect-ratio:5/7; position:relative; flex:none;
+    border-radius:16px; padding:5px;
+    background:linear-gradient(150deg,var(--tc1),#000 45%,var(--tc2));
+    box-shadow:0 10px 26px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.14);
+    transition:transform .25s cubic-bezier(.2,.8,.3,1.2), box-shadow .25s;
+    transform-style:preserve-3d;
+}
+.pcard::after{
+    content:"";position:absolute;inset:0;border-radius:16px;pointer-events:none;
+    background:linear-gradient(115deg,transparent 25%,rgba(255,255,255,.55) 45%,rgba(160,220,255,.35) 52%,transparent 70%);
+    background-size:250% 250%;background-position:120% 0;opacity:0;transition:.5s;
+}
+.pcard.holo::after{opacity:1;animation:holo 2.6s linear infinite}
+@keyframes holo{0%{background-position:140% 0}100%{background-position:-40% 0}}
+.pcard-inner{
+    width:100%;height:100%;border-radius:12px;overflow:hidden;position:relative;
+    background:linear-gradient(180deg,#f7f3e8,#e9e2d0);color:#191c2b;
+    display:flex;flex-direction:column;border:1px solid rgba(0,0,0,.25);
+}
+.phead{display:flex;align-items:center;gap:6px;padding:7px 9px 4px;background:linear-gradient(180deg,var(--tc1),var(--tc2));color:#fff}
+.pstage{font-size:.55rem;font-weight:800;background:rgba(0,0,0,.45);padding:2px 6px;border-radius:20px;letter-spacing:1px;border:1px solid rgba(255,255,255,.35)}
+.pname{font-family:'Baloo 2';font-weight:800;font-size:1.06rem;flex:1;line-height:1.05;text-shadow:0 2px 0 rgba(0,0,0,.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.php{font-family:'Baloo 2';font-weight:800;font-size:1.02rem;display:flex;align-items:baseline;gap:3px}
+.php small{font-size:.6rem;opacity:.85}
+.ptype-icon{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:.78rem;background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.5)}
+.psub{font-size:.6rem;font-weight:700;text-align:center;padding:3px 6px;background:#20243a;color:#ffe9a8;letter-spacing:.4px}
+.part{position:relative;flex:1;min-height:0;margin:6px;border-radius:8px;overflow:hidden;
+    background:radial-gradient(circle at 50% 120%, var(--tc1), #101426 70%);border:2px solid #2a2f4a}
+.part::before{content:"";position:absolute;inset:0;
+    background-image:linear-gradient(rgba(255,255,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.07) 1px,transparent 1px);
+    background-size:14px 14px;opacity:.6}
+.part-sprite{position:absolute;left:50%;bottom:4%;height:96%;aspect-ratio:1;transform:translateX(-50%);
+    background-repeat:no-repeat;background-size:200% 100%;background-position:0% 50%;background-color:transparent;
+    filter:drop-shadow(0 8px 10px rgba(0,0,0,.6));transition:transform .3s}
+.pcard:hover .part-sprite{transform:translateX(-50%) scale(1.06)}
+.part-hp{position:absolute;top:5px;right:6px;font-size:.58rem;font-weight:800;background:rgba(0,0,0,.7);color:#8bffb0;padding:2px 6px;border-radius:20px;border:1px solid rgba(255,255,255,.25)}
+.pattacks{padding:0 7px 4px;display:flex;flex-direction:column;gap:4px}
+.pattack{display:grid;grid-template-columns:auto 1fr auto;gap:5px;align-items:center;
+    background:rgba(255,255,255,.55);border:1px solid rgba(0,0,0,.14);border-radius:6px;padding:4px 6px}
+.pattack.guard{background:rgba(120,190,255,.35)}
+.pattack.status{background:rgba(140,255,170,.35)}
+.pcost{display:flex;gap:2px}
+.pcost i{width:13px;height:13px;border-radius:50%;display:block;box-shadow:inset 0 -2px 3px rgba(0,0,0,.45);border:1px solid rgba(0,0,0,.4)}
+.pattack .an{font-size:.72rem;font-weight:800;line-height:1.15}
+.pattack .ad{font-size:.78rem;font-weight:800;color:#b3123b;font-family:'Baloo 2'}
+.pattack .ad.blue{color:#0b57a8}
+.pattack .ad.green{color:#0d7a35}
+.pdesc{grid-column:1/-1;font-size:.55rem;line-height:1.35;color:#3d4360;font-style:italic}
+.pfoot{display:flex;justify-content:space-between;gap:4px;padding:4px 8px;font-size:.56rem;font-weight:700;
+    background:#20243a;color:#cfd6ff;border-top:2px solid #000}
+.pfoot b{color:#fff}
+.pflavor{font-size:.52rem;padding:4px 8px 2px;color:#4a5068;font-style:italic;line-height:1.3;
+    height:2.6em;overflow:hidden;background:#efe9db}
+.pcode{display:flex;justify-content:space-between;align-items:center;gap:6px;padding:2px 8px 5px;font-size:.52rem;color:#5a6076;background:#efe9db}
+.pid{font-family:'Be Vietnam Pro',sans-serif;font-weight:800;font-size:.5rem;letter-spacing:.3px;color:#3a4066;background:#e4dcc8;padding:1px 6px;border-radius:8px;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rarity{color:#c9a227;font-size:.7rem;letter-spacing:-1px}
+.pcard.sel{transform:translateY(-14px) scale(1.03);box-shadow:0 0 0 3px var(--gold),0 16px 30px rgba(0,0,0,.6)}
+.pcard.sel .order-badge{opacity:1;transform:scale(1)}
+.pcard.dim{filter:grayscale(.75) brightness(.6)}
+.order-badge{
+    position:absolute;top:-12px;left:-12px;width:38px;height:38px;border-radius:50%;z-index:4;
+    background:radial-gradient(circle at 30% 30%,#ffe98a,#f0a500);color:#3a2400;
+    display:grid;place-items:center;font-family:'Baloo 2';font-weight:800;font-size:1.1rem;
+    box-shadow:0 4px 10px rgba(0,0,0,.6),inset 0 0 0 2px #fff3c4;opacity:0;transform:scale(0);transition:.2s
+}
+
+#screen-prep{padding:16px;gap:14px}
+.prep-head{display:flex;align-items:center;gap:14px;max-width:1240px;width:100%;margin:0 auto;flex-wrap:wrap}
+.ghost-btn{background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:12px;padding:10px 14px;font-weight:800}
+.ghost-btn:hover{background:rgba(255,255,255,.14)}
+.prep-head h2{font-size:1.5rem;line-height:1}
+.prep-head p{font-size:.8rem;color:var(--dim)}
+.prep-search{margin-left:auto;min-width:min(280px,100%);padding:10px 14px;border-radius:12px;border:2px solid var(--line);
+    background:#0c1130;color:#fff;font-weight:700;font-size:.85rem}
+.prep-search:focus{outline:none;border-color:var(--gold)}
+.prep-body{display:flex;gap:18px;max-width:1240px;width:100%;margin:0 auto;align-items:flex-start}
+.roster-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--card-w),1fr));gap:16px;flex:1;justify-content:center;padding-bottom:20px}
+.team-panel{width:310px;flex:none;background:linear-gradient(180deg,var(--panel),#0d1230);border:2px solid var(--line);
+    border-radius:18px;padding:14px;position:sticky;top:14px;box-shadow:0 14px 30px rgba(0,0,0,.45)}
+.team-panel h3{font-size:1.05rem;margin-bottom:8px;color:var(--gold)}
+.team-slots{display:flex;flex-direction:column;gap:8px;min-height:150px}
+.tslot{display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.05);border:1px dashed #3a4690;border-radius:12px;padding:8px;min-height:56px;transition:.2s}
+.tslot.filled{border-style:solid;background:rgba(255,255,255,.09)}
+.tslot .thumb{width:42px;height:42px;border-radius:9px;background-size:200% 100%;background-position:0% 50%;flex:none;background-color:#0a0e24}
+.tslot .tinfo{flex:1;min-width:0}
+.tslot .tn{font-weight:800;font-size:.86rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tslot .thp{font-size:.7rem;color:var(--dim)}
+.tslot .pos{font-family:'Baloo 2';font-weight:800;font-size:.78rem;background:#0a0e24;border:1px solid var(--line);padding:3px 8px;border-radius:20px;color:var(--gold)}
+.tslot .rm{color:#ff8fa3;font-weight:800;padding:0 4px}
+.tslot.active-slot{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold) inset}
+.type-chart{margin-top:12px;font-size:.72rem;background:rgba(0,0,0,.3);border:1px solid var(--line);border-radius:12px;padding:9px}
+.type-chart h4{font-size:.78rem;color:var(--blue);margin-bottom:6px;letter-spacing:1px}
+.tc-row{display:flex;gap:5px;align-items:center;justify-content:center;flex-wrap:wrap}
+.tc-row span{padding:3px 7px;border-radius:7px;background:#161d4a;font-weight:700}
+.btn-big{width:100%;margin-top:12px;padding:15px;border-radius:14px;font-weight:800;font-size:1rem;
+    background:linear-gradient(180deg,#3ddc84,#12a35b);color:#04240f;box-shadow:0 5px 0 #076b3a;transition:.15s}
+.btn-big:hover{filter:brightness(1.1)}
+.btn-big:active{transform:translateY(4px);box-shadow:0 1px 0 #076b3a}
+.btn-big:disabled{background:#2b3358;color:#7d86b8;box-shadow:0 5px 0 #171c3a;cursor:not-allowed;filter:none}
+#prep-status{font-size:.78rem;color:var(--gold);text-align:center;margin-top:8px;min-height:1.2em}
+.prep-tip{display:flex;gap:8px;align-items:center;font-size:.76rem;color:var(--dim);background:rgba(255,255,255,.05);
+    border-left:3px solid var(--gold);padding:8px 12px;border-radius:0 10px 10px 0;max-width:1240px;margin:0 auto;width:100%}
+
+#screen-battle{padding:10px;gap:10px;height:100vh}
+.scene{
+    position:relative;flex:1;min-height:0;border-radius:20px;overflow:hidden;
+    background:linear-gradient(180deg,#2b6fd6 0%,#63b0f0 38%,#b8e6ff 62%,#d9f3ff 100%);
+    box-shadow:inset 0 0 90px rgba(0,0,0,.35), 0 12px 30px rgba(0,0,0,.5);
+    border:3px solid #0b1130;
+}
+.scene::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:5;
+    background:radial-gradient(ellipse at 50% 42%, transparent 48%, rgba(8,12,36,.38) 100%)}
+.sun{position:absolute;top:-70px;right:60px;width:190px;height:190px;border-radius:50%;
+    background:radial-gradient(circle,#fff9c4,rgba(255,244,150,.25) 60%,transparent 70%);filter:blur(2px)}
+.cloud{position:absolute;background:rgba(255,255,255,.85);border-radius:50px;filter:blur(1px);animation:drift linear infinite;opacity:.9}
+@keyframes drift{from{transform:translateX(-30vw)}to{transform:translateX(130vw)}}
+.hills{position:absolute;left:0;right:0;bottom:34%;height:34%;
+    background:
+      radial-gradient(60% 100% at 12% 100%, #3f8f4f 0 60%, transparent 61%),
+      radial-gradient(50% 100% at 45% 100%, #357c45 0 60%, transparent 61%),
+      radial-gradient(65% 100% at 85% 100%, #459a56 0 60%, transparent 61%);
+    opacity:.9}
+.ground{position:absolute;left:0;right:0;bottom:0;height:36%;
+    background:linear-gradient(180deg,#8fd36a,#5aa944 30%,#3f8b34);
+    border-top:5px solid rgba(255,255,255,.35)}
+.ground::after{content:"";position:absolute;inset:0;
+    background-image:linear-gradient(rgba(0,0,0,.06) 2px,transparent 2px);background-size:100% 26px;opacity:.6}
+.platform{position:absolute;width:250px;height:64px;border-radius:50%;
+    background:radial-gradient(ellipse at center,#5c9e3f 0%,#3a7a2c 55%,rgba(58,122,44,0) 72%);
+    box-shadow:0 10px 24px rgba(0,0,0,.35)}
+.platform.enemy{right:9%;top:46%;filter:brightness(1.05)}
+.platform.player{left:9%;bottom:14%}
+.sprite{position:absolute;width:230px;height:230px;background-repeat:no-repeat;background-size:200% 100%;
+    filter:drop-shadow(0 14px 12px rgba(0,0,0,.45));transition:opacity .3s;z-index:6;
+    animation:bob 3.2s ease-in-out infinite}
+@keyframes bob{0%,100%{margin-top:0}50%{margin-top:-9px}}
+.sprite.enemy{right:calc(9% + 12px);top:calc(46% - 66px);background-position:0% 50%}
+.sprite.player{left:calc(9% + 12px);bottom:calc(14% + 18px);background-position:100% 50%}
+.sprite.hidden{opacity:0}
+@keyframes lungePlayer{0%{transform:translate(0,0)}45%{transform:translate(78px,-58px) rotate(6deg)}100%{transform:translate(0,0)}}
+@keyframes lungeEnemy{0%{transform:translate(0,0)}45%{transform:translate(-78px,58px) rotate(-6deg)}100%{transform:translate(0,0)}}
+.sprite.atk-p{animation:lungePlayer .5s ease-in-out}
+.sprite.atk-e{animation:lungeEnemy .5s ease-in-out}
+@keyframes shakeT{0%,100%{transform:translateX(0)}20%{transform:translateX(-12px) rotate(-3deg)}40%{transform:translateX(12px) rotate(3deg)}60%{transform:translateX(-9px)}80%{transform:translateX(9px)}}
+.sprite.hit{animation:shakeT .45s ease;filter:drop-shadow(0 0 18px #fff) brightness(2.2) saturate(2)}
+@keyframes faintAnim{to{transform:translateY(70px) scale(.85);opacity:0;filter:grayscale(1) brightness(.4)}}
+.sprite.fainted{animation:faintAnim .7s ease-in forwards}
+@keyframes enterPlayer{from{transform:translate(-60px,40px) scale(.6);opacity:0}to{transform:none;opacity:1}}
+@keyframes enterEnemy{from{transform:translate(60px,-40px) scale(.6);opacity:0}to{transform:none;opacity:1}}
+.sprite.enter-p{animation:enterPlayer .45s cubic-bezier(.2,.9,.3,1.4)}
+.sprite.enter-e{animation:enterEnemy .45s cubic-bezier(.2,.9,.3,1.4)}
+
+.hud{position:absolute;width:min(330px,44%);background:linear-gradient(180deg,#ffffff,#e4ebf7);
+    color:#141a33;border:3px solid #141a33;border-radius:14px;padding:8px 10px 7px;z-index:12;
+    box-shadow:0 6px 0 rgba(0,0,0,.28),0 14px 26px rgba(0,0,0,.35)}
+.hud.enemy{top:14px;left:14px}
+.hud.player{right:14px;bottom:14px}
+.hud-top{display:flex;align-items:baseline;gap:8px}
+.hud-name{font-family:'Baloo 2';font-weight:800;font-size:1.06rem;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hud-lv{font-size:.7rem;font-weight:800;background:#141a33;color:#ffd75f;padding:2px 7px;border-radius:20px}
+.hud-type{font-size:.62rem;font-weight:800;padding:2px 7px;border-radius:20px;color:#fff}
+.hud-hp{display:flex;align-items:center;gap:6px;margin-top:5px}
+.hp-tag{font-family:'Baloo 2';font-size:.66rem;font-weight:800;color:#f7c948;text-shadow:1px 1px 0 #141a33}
+.hpbar{flex:1;height:11px;background:#2a2f45;border-radius:8px;overflow:hidden;border:1px solid #141a33;position:relative}
+.hpfill{height:100%;width:100%;background:linear-gradient(180deg,#7dffb0,#28c76f);transition:width .55s cubic-bezier(.3,.9,.4,1)}
+.hud-num{display:flex;justify-content:space-between;align-items:center;font-size:.72rem;font-weight:800;color:#39406a;margin-top:2px}
+.hud-num .shield-chip{color:#0b57a8}
+.chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px;min-height:0}
+.chip{font-size:.6rem;font-weight:800;padding:2px 7px;border-radius:20px;background:#141a33;color:#fff;display:flex;gap:4px;align-items:center}
+.chip.shield{background:#0b57a8}
+.chip.burn{background:#e2560f}
+.chip.poison{background:#7a2ea8}
+.chip.expose{background:#c1123f}
+.pips{display:flex;gap:5px;margin-top:5px}
+.pip{width:15px;height:15px;border-radius:50%;background:radial-gradient(circle at 32% 30%,#fff,#cfd6ff 40%,#4a5bd0 70%);border:2px solid #141a33;position:relative}
+.pip.down{background:#5a6083;opacity:.55}
+.pip.down::after{content:"✕";position:absolute;inset:0;display:grid;place-items:center;font-size:.6rem;color:#fff;font-weight:800}
+.hud.faint{filter:grayscale(.8) opacity(.75)}
+
+.turn-badge{position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:14;
+    font-family:'Baloo 2';font-weight:800;font-size:.9rem;letter-spacing:3px;color:#fff;
+    background:rgba(10,14,36,.85);border:2px solid var(--gold);padding:5px 18px;border-radius:30px;
+    opacity:0;transition:.3s}
+.turn-badge.show{opacity:1;top:16px}
+.center-banner{position:absolute;inset:0;display:grid;place-items:center;z-index:30;pointer-events:none}
+.center-banner span{font-family:'Baloo 2';font-weight:800;font-size:clamp(1.6rem,6vw,3.4rem);color:#fff;
+    text-shadow:0 5px 0 #141a33,0 0 40px rgba(255,215,95,.8);letter-spacing:2px;opacity:0}
+.damage-pop{position:absolute;z-index:40;font-family:'Baloo 2';font-weight:800;font-size:2.1rem;color:#ff4d6d;
+    text-shadow:2px 2px 0 #141a33,-1px -1px 0 #141a33;pointer-events:none}
+.damage-pop.heal{color:#4ade80}
+.damage-pop.crit{color:#ffd75f;font-size:2.6rem}
+.proj{position:absolute;width:46px;height:46px;border-radius:50%;z-index:35;pointer-events:none;
+    box-shadow:0 0 26px 6px currentColor, inset 0 0 14px rgba(255,255,255,.9)}
+.mute-btn{position:absolute;top:14px;right:14px;z-index:20;background:rgba(10,14,36,.7);border:1px solid var(--line);
+    border-radius:10px;padding:7px 10px;font-size:.9rem}
+.mute-btn:hover{background:rgba(10,14,36,.95)}
+.btn-log{position:absolute;top:14px;right:70px;z-index:20;background:rgba(10,14,36,.7);border:1px solid var(--line);
+    border-radius:10px;padding:7px 10px;font-size:.8rem;font-weight:700}
+.btn-log:hover{background:rgba(10,14,36,.95)}
+
+.bottom{display:flex;gap:10px;align-items:stretch}
+.msgbox{flex:1;min-width:0;background:linear-gradient(180deg,#101733,#0a0f28);border:3px solid #2c3875;
+    border-radius:16px;padding:14px 18px;min-height:110px;position:relative;box-shadow:inset 0 0 30px rgba(0,0,0,.5)}
+.msg{font-size:1.02rem;line-height:1.5;font-weight:600;white-space:pre-wrap}
+.msg b{color:var(--gold)}
+.msg .eff{color:#ffd75f;font-weight:800}
+.msg .noeff{color:#9aa3d0;font-weight:800}
+.msg .crit{color:#ff8fa3;font-weight:800}
+.msg-arrow{position:absolute;right:14px;bottom:10px;color:var(--gold);font-size:.9rem;opacity:0;animation:blink 1s infinite}
+.msg-arrow.on{opacity:1}
+@keyframes blink{0%,100%{transform:translateY(0);opacity:.35}50%{transform:translateY(4px);opacity:1}}
+.menu-panel{width:min(400px,42%);display:grid;grid-template-columns:1fr 1fr;gap:8px;align-content:start}
+.act{background:linear-gradient(180deg,#232c66,#161d4a);border:2px solid var(--line);border-radius:14px;
+    padding:11px 10px;font-weight:800;font-size:.95rem;display:flex;flex-direction:column;gap:2px;transition:.12s;
+    box-shadow:0 4px 0 #0a0f2c;position:relative;overflow:hidden}
+.act:hover:not(:disabled){transform:translateY(-2px);border-color:#6d7dff;background:linear-gradient(180deg,#2c3785,#1b2355)}
+.act:active:not(:disabled){transform:translateY(3px);box-shadow:0 1px 0 #0a0f2c}
+.act:disabled{opacity:.5;cursor:not-allowed}
+.act .sub{font-size:.68rem;font-weight:600;color:var(--dim);display:flex;gap:6px;align-items:center;justify-content:space-between}
+.act .big{font-size:1.02rem}
+.act.fight{background:linear-gradient(180deg,#ff5a3c,#c1123f);border-color:#ff9b7a;box-shadow:0 4px 0 #6a0f22}
+.act.fight:hover{background:linear-gradient(180deg,#ff7456,#e11d48)}
+.act.switch{background:linear-gradient(180deg,#3aa0ff,#1462c4);border-color:#8fd3ff;box-shadow:0 4px 0 #0a3f7d}
+.act.guard{background:linear-gradient(180deg,#3ddc84,#12a35b);border-color:#a9f5c9;box-shadow:0 4px 0 #076b3a;color:#04240f}
+.type-dot{width:11px;height:11px;border-radius:50%;display:inline-block;border:1px solid rgba(0,0,0,.4)}
+.pp-badge{font-size:.7rem;background:#0a0f28;border:1px solid var(--line);border-radius:20px;padding:1px 7px;color:var(--gold)}
+.act.disabled-move{opacity:.45}
+
+.overlay{position:fixed;inset:0;background:rgba(4,7,22,.86);z-index:200;display:none;flex-direction:column;
+    align-items:center;justify-content:center;gap:14px;padding:20px;backdrop-filter:blur(4px)}
+.overlay.show{display:flex;animation:screenIn .25s ease}
+.ov-title{font-family:'Baloo 2';font-size:1.5rem;color:var(--gold)}
+.ov-desc{font-size:.85rem;color:var(--dim);text-align:center;max-width:520px}
+.switch-list{display:flex;flex-direction:column;gap:10px;width:min(560px,94vw);max-height:70vh;overflow-y:auto;padding:4px}
+.sw-row{display:flex;gap:12px;align-items:center;background:linear-gradient(180deg,#1b2350,#121838);
+    border:2px solid var(--line);border-radius:14px;padding:10px 12px;transition:.15s;text-align:left}
+.sw-row:hover:not(:disabled){border-color:var(--gold);transform:translateX(6px)}
+.sw-row:disabled{opacity:.45;cursor:not-allowed}
+.sw-row .thumb{width:54px;height:54px;border-radius:10px;background-size:200% 100%;background-position:0% 50%;background-color:#0a0e24;flex:none;border:1px solid var(--line)}
+.sw-row .info{flex:1;min-width:0}
+.sw-row .n{font-weight:800}
+.sw-row .m{font-size:.72rem;color:var(--dim)}
+.mini-hp{height:8px;background:#0a0e24;border-radius:6px;overflow:hidden;margin-top:5px;border:1px solid var(--line)}
+.mini-hp i{display:block;height:100%;background:linear-gradient(90deg,#28c76f,#7dffb0)}
+.sw-tag{font-size:.68rem;font-weight:800;padding:4px 9px;border-radius:20px;background:#0a0e24;border:1px solid var(--line);color:var(--gold)}
+.ov-actions{display:flex;gap:10px}
+.log-list{width:min(700px,94vw);max-height:60vh;overflow-y:auto;background:rgba(4,7,22,.9);border:2px solid var(--line);
+    border-radius:14px;padding:12px;font-size:.82rem;line-height:1.6;display:flex;flex-direction:column}
+.log-list p{border-bottom:1px solid rgba(255,255,255,.05);padding:3px 0}
+.log-list p.t{color:var(--gold);font-weight:800}
+.result-card{background:linear-gradient(180deg,#1b2350,#0d1230);border:3px solid var(--gold);border-radius:24px;
+    padding:34px 44px;text-align:center;box-shadow:0 0 60px rgba(255,215,95,.25)}
+.result-card h1{font-size:3rem;background:linear-gradient(180deg,#fff,#ffd75f);-webkit-background-clip:text;background-clip:text;color:transparent}
+.result-card h1.lose{background:linear-gradient(180deg,#fff,#ff4d6d);-webkit-background-clip:text;background-clip:text;color:transparent}
+.result-card p{color:var(--dim);margin-top:6px}
+.btn-gold{margin-top:18px;padding:13px 28px;border-radius:14px;font-weight:800;
+    background:linear-gradient(180deg,#ffd75f,#f0a500);color:#3a2400;box-shadow:0 5px 0 #8a5e00}
+.btn-gold:hover{filter:brightness(1.08)}
+.btn-plain{padding:13px 24px;border-radius:14px;font-weight:800;background:#232c66;border:2px solid var(--line)}
+
+.wait-dots::after{content:"";animation:dots 1.4s steps(4,end) infinite}
+@keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
+
+.trainer-card{display:flex;gap:14px;align-items:center;background:linear-gradient(180deg,#1b2350,#0d1230);
+    border:2px solid var(--line);border-radius:18px;padding:12px 16px;width:min(460px,94vw);
+    box-shadow:0 12px 28px rgba(0,0,0,.45);position:relative;z-index:2}
+.trainer-card .avatar{width:58px;height:58px;border-radius:16px;display:grid;place-items:center;font-size:1.9rem;
+    background:radial-gradient(circle at 30% 25%,#ffd75f,#f0a500);box-shadow:inset 0 -4px 8px rgba(0,0,0,.3),0 4px 10px rgba(0,0,0,.4)}
+.trainer-card .tinfo{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.trainer-card input{padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:#0a0e24;color:#fff;
+    font-weight:800;font-size:.95rem;width:100%}
+.trainer-card input:focus{outline:none;border-color:var(--gold)}
+.trainer-card .tid{font-size:.72rem;color:var(--dim);display:flex;align-items:center;gap:8px;letter-spacing:1px}
+.trainer-card .tid b{font-family:'Baloo 2';font-size:1rem;color:var(--gold);letter-spacing:2px}
+.trainer-card .tid button{background:#232c66;border:1px solid var(--line);border-radius:8px;padding:2px 9px;font-weight:800}
+.trainer-card .tid button:hover{background:#2f3a86}
+.reg-badge{font-size:.62rem;background:rgba(74,222,128,.15);border:1px solid rgba(74,222,128,.5);color:#8bffb0;
+    padding:2px 8px;border-radius:20px;font-weight:800}
+
+.friend-box{width:min(400px,92vw);position:relative;z-index:2;background:linear-gradient(180deg,#141b44,#0d1230);
+    border:2px solid var(--line);border-radius:16px;padding:12px 14px;display:flex;flex-direction:column;gap:9px}
+.friend-box h4{font-size:.82rem;letter-spacing:2px;color:var(--gold)}
+.friend-box input{padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#0a0e24;color:#fff;
+    font-weight:700;font-size:.85rem;width:100%}
+.friend-box input:focus{outline:none;border-color:var(--gold)}
+.friend-list{display:flex;flex-direction:column;gap:7px;max-height:190px;overflow-y:auto}
+.friend-row{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.06);
+    border:1px solid var(--line);border-radius:11px;padding:8px 10px;transition:.15s;text-align:left;width:100%}
+.friend-row:hover{border-color:var(--gold);transform:translateX(4px);background:rgba(255,255,255,.1)}
+.friend-code{font-family:'Baloo 2';font-weight:800;letter-spacing:2px;color:var(--gold);font-size:.95rem}
+.friend-name{flex:1;font-size:.78rem;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.friend-go{font-size:.75rem;font-weight:800;color:#8bffb0}
+.friend-del{color:#ff8fa3;font-weight:800;padding:2px 6px;border-radius:8px;font-size:.75rem}
+.friend-del:hover{background:rgba(255,77,109,.2)}
+.friend-empty{font-size:.76rem;color:#6f78ad;text-align:center;padding:8px;line-height:1.5}
+
+.hud-tr{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:.63rem;font-weight:800;
+    letter-spacing:1.4px;color:#5a6083;text-transform:uppercase;margin-bottom:2px}
+.hud-tr .adv{padding:1px 7px;border-radius:20px;letter-spacing:.4px;text-transform:none}
+.adv.good{background:#0d7a35;color:#d6ffe4}
+.adv.bad{background:#c1123f;color:#ffe1e8}
+.adv.even{background:#3a4066;color:#cfd4ff}
+.matchup{position:absolute;left:6px;bottom:6px;font-size:.56rem;font-weight:800;padding:3px 7px;border-radius:20px;
+    backdrop-filter:blur(4px);z-index:3;border:1px solid rgba(255,255,255,.25)}
+.matchup.good{background:rgba(13,122,53,.9);color:#d6ffe4}
+.matchup.bad{background:rgba(193,18,63,.9);color:#ffe1e8}
+.eff-badge{font-size:.62rem;font-weight:800;padding:1px 7px;border-radius:20px;letter-spacing:.5px}
+.eff-badge.good{background:#0d7a35;color:#d6ffe4}
+.eff-badge.bad{background:#7a1226;color:#ffd3dc}
+.eff-badge.even{background:#0a0f28;color:#aab2e6;border:1px solid var(--line)}
+.type-pill{font-size:.58rem;font-weight:800;padding:1px 6px;border-radius:20px;color:#fff;vertical-align:middle}
+.sw-tag.on{background:linear-gradient(180deg,#ffd75f,#f0a500);color:#3a2400;border-color:#ffe9a8}
+#debug-out{position:fixed;left:0;bottom:0;max-height:45vh;overflow:auto;background:#000;color:#0f0;font:11px/1.35 monospace;
+    z-index:9999;margin:0;padding:6px;width:100%;white-space:pre-wrap}
+
+@media (max-width:960px){
+    .prep-search{margin-left:0;width:100%}
+    .prep-body{flex-direction:column}
+    .team-panel{width:100%;position:static;order:-1}
+    .bottom{flex-direction:column}
+    .menu-panel{width:100%}
+    .msgbox{min-height:88px}
+    .sprite{width:160px;height:160px}
+    .hud{width:min(280px,60%)}
+    .platform{width:170px;height:46px}
+    #screen-battle{height:auto;min-height:100vh}
+    .scene{min-height:52vh}
+    .cards-fan{transform:scale(.8);margin:-20px 0}
+}
+@media (max-width:560px){
+    :root{--card-w:200px}
+    .sprite{width:125px;height:125px}
+    .hud{padding:6px 8px}
+    .hud-name{font-size:.9rem}
+}
+.part-sprite{
+    position:absolute;left:50%;bottom:4%;height:96%;aspect-ratio:1;transform:translateX(-50%);
+    background-repeat:no-repeat;background-size:200% 100%;background-position:0% 50%;background-color:transparent;
+    filter:drop-shadow(0 8px 10px rgba(0,0,0,.6));transition:transform .3s;
+}
+.pcard:hover .part-sprite{transform:translateX(-50%) scale(1.06)}
+
+/* KHI CÓ ẢNH CARD: cover toàn ô art, không drop-shadow, không dịch chuyển */
+.part-sprite.is-card{
+    left:0;bottom:0;height:100%;width:100%;
+    aspect-ratio:auto;transform:none;
+    background-size:cover;
+    background-position:center;
+    filter:none;
+    border-radius:6px;
+}
+.pcard:hover .part-sprite.is-card{
+    transform:scale(1.04);
+}
+.chip.stun{background:#9333ea}
+.chip.freeze{background:#0ea5e9}
+.chip.paralyze{background:#eab308}
+.chip.confuse{background:#ec4899}
+.chip.reflect{background:#8b5cf6}
+/* ============ ROLL SCREEN ============ */
+#screen-roll {
+    padding: 20px;
+    gap: 16px;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: radial-gradient(ellipse at center, #1a1f4a 0%, #0a0e24 70%);
+    position: relative;
+    overflow: hidden;
+}
+#screen-roll::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(circle at 20% 30%, rgba(139,108,255,.15) 0%, transparent 40%),
+        radial-gradient(circle at 80% 70%, rgba(255,215,95,.12) 0%, transparent 40%);
+    pointer-events: none;
+}
+.roll-head { text-align: center; position: relative; z-index: 2; }
+.roll-title {
+    font-family: 'Baloo 2';
+    font-size: clamp(2rem, 6vw, 3rem);
+    font-weight: 800;
+    background: linear-gradient(180deg, #fff 20%, #ffd75f 60%, #ff9b21 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 0 4px 0 rgba(0,0,0,.4);
+    letter-spacing: 3px;
+    margin-bottom: 4px;
+}
+.roll-sub { color: var(--dim); font-size: .9rem; }
+.roll-sub b { color: var(--gold); }
+
+.roll-stage {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0;
+    padding: 20px;
+    perspective: 1200px;
+    min-height: 380px;
+    position: relative;
+    z-index: 2;
+    flex-wrap: wrap;
+    max-width: 1400px;
+}
+.roll-stage .pcard {
+    --card-w: 180px;
+    margin: 0 -30px;
+    transform-origin: bottom center;
+    transition: transform .35s cubic-bezier(.2,.8,.3,1.2), filter .35s, box-shadow .35s;
+    cursor: pointer;
+    position: relative;
+}
+.roll-stage .pcard:nth-child(1) { transform: rotate(-15deg) translateY(15px); }
+.roll-stage .pcard:nth-child(2) { transform: rotate(-9deg) translateY(5px); }
+.roll-stage .pcard:nth-child(3) { transform: rotate(-3deg) translateY(-5px); }
+.roll-stage .pcard:nth-child(4) { transform: rotate(3deg) translateY(-5px); }
+.roll-stage .pcard:nth-child(5) { transform: rotate(9deg) translateY(5px); }
+.roll-stage .pcard:nth-child(6) { transform: rotate(15deg) translateY(15px); }
+
+.roll-stage .pcard:hover {
+    transform: rotate(0deg) translateY(-40px) scale(1.08) !important;
+    z-index: 10;
+    box-shadow: 0 20px 50px rgba(0,0,0,.7), 0 0 40px rgba(255,215,95,.5);
+}
+.roll-stage .pcard.picked {
+    transform: rotate(0deg) translateY(-50px) scale(1.15) !important;
+    z-index: 20;
+    box-shadow: 0 0 0 4px var(--gold), 0 20px 60px rgba(255,215,95,.6);
+}
+.roll-stage .pcard.dimmed {
+    opacity: .35;
+    filter: grayscale(.6);
+}
+
+/* Card roll animation */
+@keyframes cardRollIn {
+    0% { transform: translateY(-200px) rotate(720deg) scale(.3); opacity: 0; }
+    60% { transform: translateY(20px) rotate(20deg) scale(1.05); opacity: 1; }
+    100% { transform: none; opacity: 1; }
+}
+.roll-stage .pcard.rolling {
+    animation: cardRollIn .7s cubic-bezier(.2,.9,.3,1.4) both;
+}
+
+.roll-info {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    justify-content: center;
+    position: relative;
+    z-index: 2;
+    min-height: 30px;
+}
+.roll-badge {
+    background: linear-gradient(180deg, #ffd75f, #f0a500);
+    color: #3a2400;
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-weight: 800;
+    font-size: .8rem;
+    box-shadow: 0 3px 0 #8a5e00;
+}
+.roll-status {
+    color: var(--dim);
+    font-size: .88rem;
+    font-weight: 600;
+}
+.roll-status b { color: var(--gold); }
+
+.roll-actions {
+    display: flex;
+    gap: 12px;
+    position: relative;
+    z-index: 2;
+}
+.roll-actions .btn-gold { margin-top: 0; }
+.roll-actions .btn-gold:disabled {
+    background: #2b3358;
+    color: #7d86b8;
+    box-shadow: 0 5px 0 #171c3a;
+    cursor: not-allowed;
+    filter: none;
+}
+
+/* Rarity glow trên card */
+.roll-stage .pcard[data-rarity="3"] {
+    box-shadow: 0 10px 26px rgba(0,0,0,.55),
+                0 0 30px rgba(255,215,95,.6),
+                inset 0 0 0 1px rgba(255,215,95,.5);
+}
+.roll-stage .pcard[data-rarity="3"]::before {
+    content: "★ R3";
+    position: absolute;
+    top: -10px;
+    right: -10px;
+    background: linear-gradient(180deg, #ffd75f, #f0a500);
+    color: #3a2400;
+    font-weight: 800;
+    font-size: .7rem;
+    padding: 4px 10px;
+    border-radius: 20px;
+    z-index: 5;
+    box-shadow: 0 3px 8px rgba(0,0,0,.5);
+    letter-spacing: 1px;
+}
+.roll-stage .pcard[data-rarity="2"]::before {
+    content: "R2";
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    background: linear-gradient(180deg, #4aa8ff, #1462c4);
+    color: #fff;
+    font-weight: 800;
+    font-size: .65rem;
+    padding: 3px 8px;
+    border-radius: 20px;
+    z-index: 5;
+    box-shadow: 0 3px 8px rgba(0,0,0,.5);
+}
+/* Ẩn lưới grid overlay khi card art là ảnh cover */
+.pcard.has-card .part::before {
+    display: none;
+}
+/* ============ THẺ FULL ẢNH (khi có cardimage) ============ */
+.pcard.pcard-image {
+    background: transparent;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    box-shadow: 0 10px 26px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.14);
+}
+
+.pcard.pcard-image::after {
+    /* Vẫn giữ hiệu ứng holo shine nếu cần */
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    pointer-events: none;
+    background: linear-gradient(115deg,transparent 25%,rgba(255,255,255,.55) 45%,rgba(160,220,255,.35) 52%,transparent 70%);
+    background-size: 250% 250%;
+    background-position: 120% 0;
+    opacity: 0;
+    transition: .5s;
+    z-index: 3;
+}
+
+.pcard.pcard-image.holo::after {
+    opacity: 1;
+    animation: holo 2.6s linear infinite;
+}
+
+.pcard-fullimg {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center;
+    border-radius: 12px;
+    display: block;
+    background: transparent;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+/* Khi hover card ảnh → scale nhẹ giống card HTML */
+.pcard.pcard-image:hover .pcard-fullimg {
+    transform: scale(1.02);
+    transition: transform .25s ease;
+}
+
+/* Card ảnh khi được chọn */
+.pcard.pcard-image.sel {
+    transform: translateY(-14px) scale(1.03);
+    box-shadow: 0 0 0 3px var(--gold), 0 16px 30px rgba(0,0,0,.6);
+}
+
+/* Card ảnh khi bị dim */
+.pcard.pcard-image.dim {
+    filter: grayscale(.75) brightness(.6);
+}
+@media (max-width: 960px) {
+    .roll-stage {
+        transform: scale(.85);
+        min-height: 320px;
+    }
+    .roll-stage .pcard { --card-w: 150px; margin: 0 -40px; }
+}
+@media (max-width: 560px) {
+    .roll-stage .pcard { --card-w: 120px; margin: 0 -50px; }
+    .roll-stage { transform: scale(.9); }
+}
+</style>
+</head>
+<body>
+
+<div id="fx-layer"><div class="flash" id="fx-flash"></div></div>
+
+<section id="screen-lobby" class="screen active">
+    <div class="orb" style="width:340px;height:340px;background:#4a3fff;top:-90px;left:-70px"></div>
+    <div class="orb" style="width:300px;height:300px;background:#ff3f7a;bottom:-80px;right:-60px;animation-delay:-4s"></div>
+
+    <div class="logo-box">
+        <div class="kicker">Trận chiến Pokémon 2D</div>
+        <div class="logo-title">POKÉ DUEL</div>
+        <div class="logo-sub">Hắc Hợi Phong TCG — 3 quái đấu 3 quái, đổi bài &amp; đấu trí</div>
+        <div class="cards-fan" id="cards-fan"></div>
+    </div>
+
+    <div class="trainer-card" id="trainer-card"></div>
+
+    <div class="menu">
+        <button class="menu-btn primary" id="btn-ai">⚔️ Đấu Với Máy</button>
+        <button class="menu-btn" id="btn-create">🌐 Tạo Phòng Online</button>
+        <div class="join-row">
+            <input id="room-input" maxlength="10" placeholder="MÃ ĐĂNG KÝ CỦA BẠN BÈ" autocomplete="off">
+            <button class="menu-btn" id="btn-join" style="padding:14px 20px">Vào</button>
+        </div>
+        <div id="room-id-container">
+            <div style="font-size:.78rem;color:var(--dim)">Mã đăng ký của bạn — gửi cho bạn bè</div>
+            <div id="room-id-display">----</div>
+            <button id="copy-btn">Sao chép mã</button>
+        </div>
+        <p id="status-text">Sẵn sàng chiến đấu</p>
+    </div>
+
+    <div class="friend-box">
+        <h4>📖 SỔ ĐĂNG KÝ ID — TÌM BẠN CHO DỄ</h4>
+        <input id="friend-search" maxlength="16" placeholder="🔍 Tìm theo mã hoặc tên... (vd: PK...)" autocomplete="off">
+        <div class="friend-list" id="friend-list"></div>
+    </div>
+
+    <p class="hint">💡 <b>Đăng ký ID nhân vật</b> một lần (lưu trong máy) → dùng chính mã đó để bạn bè tìm và vào trận với bạn. Chế độ <b>Máy</b> để đấu ngay 1 mình.</p>
+</section>
+
+<!-- ==================== ROLL SCREEN ==================== -->
+<section id="screen-roll" class="screen">
+    <div class="roll-head">
+        <h2 class="roll-title">🎴 TRIỆU HỒI</h2>
+        <p class="roll-sub">Chọn <b>1 trong 6</b> Pokémon để bắt đầu hành trình</p>
+    </div>
+    
+    <div class="roll-stage" id="roll-stage">
+        <!-- Cards sẽ được inject -->
+    </div>
+    
+    <div class="roll-info">
+        <div class="roll-badge" id="roll-pity-badge" style="display:none">
+            ⭐ PITY: <span id="roll-pity-count">0</span>
+        </div>
+        <div class="roll-status" id="roll-status">Nhấn vào thẻ để chọn</div>
+    </div>
+    
+    <div class="roll-actions">
+        <button class="btn-gold" id="btn-roll-confirm" disabled>✓ XÁC NHẬN</button>
+        <button class="btn-plain" id="btn-roll-reroll">🎲 ROLL LẠI</button>
+    </div>
+</section>
+
+<section id="screen-prep" class="screen">
+    <div class="prep-head">
+        <button class="ghost-btn" id="btn-prep-back">← Rời trận</button>
+        <div>
+            <h2>CHỌN ĐỘI HÌNH</h2>
+            <p>Chọn <b style="color:var(--gold)">3 quái vật</b> · thứ tự chọn = thứ tự ra sân (đứng đầu là ACTIVE)</p>
+        </div>
+        <input class="prep-search" id="roster-search" maxlength="24" placeholder="🔍 Tìm ID / tên (vd: hac_hoi_phong)" autocomplete="off">
+    </div>
+    <div class="prep-tip">💡 <span id="prep-tip-text">Gợi ý: hãy chọn 3 hệ khắc nhau để luôn có phương án đối phó — đánh đổi thủ bằng hệ mạnh hơn sẽ gây <b>150%</b> sát thương.</span></div>
+    <div class="prep-body">
+        <div class="roster-grid" id="roster-grid"></div>
+        <aside class="team-panel">
+            <h3>Đội hình của bạn</h3>
+            <div class="team-slots" id="team-slots"></div>
+            <div class="type-chart">
+                <h4>BẢNG HỆ</h4>
+                <div class="tc-row" id="type-chart"></div>
+            </div>
+            <button class="btn-big" id="btn-confirm-team" disabled>XÁC NHẬN ĐỘI HÌNH</button>
+            <p id="prep-status">Chọn đủ 3 quái để bắt đầu</p>
+        </aside>
+    </div>
+</section>
+
+<section id="screen-battle" class="screen">
+    <div class="scene" id="scene">
+        <div class="sun"></div>
+        <div class="cloud" style="width:120px;height:36px;top:18%;animation-duration:38s"></div>
+        <div class="cloud" style="width:80px;height:26px;top:28%;animation-duration:52s;animation-delay:-12s;opacity:.7"></div>
+        <div class="cloud" style="width:150px;height:42px;top:12%;animation-duration:44s;animation-delay:-22s"></div>
+        <div class="hills"></div>
+        <div class="ground"></div>
+        <div class="platform enemy"></div>
+        <div class="platform player"></div>
+
+        <div class="sprite enemy hidden" id="sprite-enemy"></div>
+        <div class="sprite player hidden" id="sprite-player"></div>
+
+        <div class="hud enemy" id="hud-enemy">
+            <div class="hud-tr"><span id="tr-enemy">ĐỐI THỦ</span><span class="adv even" id="adv-enemy"></span></div>
+            <div class="hud-top">
+                <span class="hud-name" id="name-enemy">???</span>
+                <span class="hud-type" id="type-enemy">-</span>
+                <span class="hud-lv">Lv.30</span>
+            </div>
+            <div class="hud-hp"><span class="hp-tag">HP</span><div class="hpbar"><div class="hpfill" id="hpfill-enemy"></div></div></div>
+            <div class="hud-num"><span id="hpnum-enemy">-- / --</span><span class="shield-chip" id="shield-enemy"></span></div>
+            <div class="chips" id="chips-enemy"></div>
+            <div class="pips" id="pips-enemy"></div>
+        </div>
+
+        <div class="hud player" id="hud-player">
+            <div class="hud-tr"><span id="tr-player">BẠN</span><span class="adv even" id="adv-player"></span></div>
+            <div class="hud-top">
+                <span class="hud-name" id="name-player">???</span>
+                <span class="hud-type" id="type-player">-</span>
+                <span class="hud-lv">Lv.30</span>
+            </div>
+            <div class="hud-hp"><span class="hp-tag">HP</span><div class="hpbar"><div class="hpfill" id="hpfill-player"></div></div></div>
+            <div class="hud-num"><span id="hpnum-player">-- / --</span><span class="shield-chip" id="shield-player"></span></div>
+            <div class="chips" id="chips-player"></div>
+            <div class="pips" id="pips-player"></div>
+        </div>
+
+        <div class="turn-badge" id="turn-badge">LƯỢT 1</div>
+        <div class="center-banner" id="center-banner"><span></span></div>
+        <button class="btn-log" id="btn-log">📖 Nhật ký</button>
+        <button class="mute-btn" id="btn-mute">🔊</button>
+    </div>
+
+    <div class="bottom">
+        <div class="msgbox">
+            <div class="msg" id="msg"></div>
+            <div class="msg-arrow" id="msg-arrow">▼</div>
+        </div>
+        <div class="menu-panel" id="action-menu"></div>
+    </div>
+</section>
+
+<div class="overlay" id="ov-switch">
+    <div class="ov-title" id="switch-title">ĐỔI BÀI</div>
+    <div class="ov-desc" id="switch-desc">Chọn quái vật sẽ ra sân. Đổi bài tốn 1 lượt (không đánh được).</div>
+    <div class="switch-list" id="switch-list"></div>
+    <div class="ov-actions"><button class="btn-plain" id="btn-switch-cancel">Hủy</button></div>
+</div>
+
+<div class="overlay" id="ov-log">
+    <div class="ov-title">NHẬT KÝ TRẬN</div>
+    <div class="log-list" id="log-list"></div>
+    <button class="btn-plain" id="btn-log-close">Đóng</button>
+</div>
+
+<div class="overlay" id="ov-result">
+    <div class="result-card">
+        <h1 id="result-title">CHIẾN THẮNG!</h1>
+        <p id="result-sub">Đội hình của bạn đã hạ gục toàn bộ đối thủ.</p>
+        <div class="ov-actions" style="justify-content:center">
+            <button class="btn-gold" id="btn-rematch">⚔️ Đấu lại</button>
+            <button class="btn-plain" id="btn-home">Về sảnh</button>
+        </div>
+    </div>
+</div>
+
+<!-- QUAN TRỌNG: game.js PHẢI load SAU render.js -->
+<script src="game.js"></script>
+</body>
+</html>

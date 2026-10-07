@@ -1,7 +1,7 @@
 // game.js
 // ============================================================
 //  POKÉ DUEL — game loop, profile/ID, network, AI, animation
-//  V3: Roll system + skill system mở rộng + fix sprite crop
+//  V4: Fix hybrid skill + VFX riêng theo hệ + passive system
 // ============================================================
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -47,7 +47,6 @@ let currentScreen = "lobby";
 let oppName = "";
 let autoPlay = false;
 let assetsReady = false;
-// ROLL STATE
 let rollMonsters = [];
 let rollPickedIdx = -1;
 
@@ -135,6 +134,9 @@ const SFX = (() => {
         stun: () => { tone(880, 220, 0.3, "square", 0.05); tone(660, 180, 0.3, "square", 0.05, 0.15); },
         reflect: () => tone(1200, 400, 0.25, "triangle", 0.06),
         roll: () => { tone(300, 600, 0.1, "square", 0.05); tone(500, 900, 0.15, "square", 0.05, 0.12); },
+        passive: () => { tone(880, 1320, 0.15, "sine", 0.05); tone(1320, 1760, 0.2, "sine", 0.04, 0.15); },
+        buff: () => { tone(660, 990, 0.12, "square", 0.05); tone(990, 1320, 0.15, "square", 0.05, 0.1); },
+        debuff: () => { tone(880, 440, 0.15, "sawtooth", 0.05); tone(440, 220, 0.2, "sawtooth", 0.05, 0.12); },
         win: () => [523, 659, 784, 1046].forEach((f, i) => tone(f, f, 0.17, "square", 0.06, i * 0.14)),
         lose: () => [400, 340, 270, 190].forEach((f, i) => tone(f, f * 0.9, 0.24, "triangle", 0.06, i * 0.18))
     };
@@ -175,14 +177,6 @@ function setStatus(t) { if (EL["status-text"]) EL["status-text"].textContent = t
 // ============================================================
 //  SKILL HELPERS
 // ============================================================
-const EFFECT_KIND = {
-    expose: "debuff", burn: "dot", poison: "dot",
-    stun: "control", freeze: "control", paralyze: "control", confuse: "control",
-    heal: "buff", buff_atk: "buff", buff_def: "buff",
-    debuff_atk: "debuff", debuff_def: "debuff",
-    shield: "buff", drain: "buff", reflect: "buff"
-};
-
 const EFFECT_ICON = {
     expose: "⚠️", burn: "🔥", poison: "☠️",
     stun: "💫", freeze: "❄️", paralyze: "⚡", confuse: "😵",
@@ -199,6 +193,9 @@ function isGuardMove(mv) {
 }
 function isStatusMove(mv) {
     return mv && (mv.kind === "status" || (!mv.kind && (mv.heal || mv.effect)));
+}
+function isPassiveMove(mv) {
+    return mv && mv.kind === "passive";
 }
 
 // ============================================================
@@ -399,14 +396,14 @@ function joinByCode(raw) {
 }
 
 function bindLobby() {
-EL["btn-ai"].addEventListener("click", () => {
-    if (!assetsReady) { setStatus("Đang tải thẻ, đợi 1 chút..."); return; }
-    SFX.select();
-    closePeer();
-    mode = "ai"; isHost = true; mySide = 0;
-    setStatus("Chế độ đấu với Máy — roll thẻ nào!");
-    enterRoll();
-});
+    EL["btn-ai"].addEventListener("click", () => {
+        if (!assetsReady) { setStatus("Đang tải thẻ, đợi 1 chút..."); return; }
+        SFX.select();
+        closePeer();
+        mode = "ai"; isHost = true; mySide = 0;
+        setStatus("Chế độ đấu với Máy — roll thẻ nào!");
+        enterRoll();
+    });
     EL["btn-create"].addEventListener("click", () => {
         SFX.click();
         closePeer();
@@ -549,7 +546,6 @@ function renderRoll(animate) {
         animate: animate === true
     });
 
-    // Restore picked state
     if (rollPickedIdx >= 0) {
         const cards = document.querySelectorAll("#roll-stage .pcard");
         cards.forEach((c, i) => {
@@ -564,7 +560,6 @@ function renderRoll(animate) {
         EL["roll-status"].innerHTML = "Nhấn vào thẻ để chọn";
     }
 
-    // ← FORCE refresh card art (fix timing bug ảnh load sau khi DOM render)
     if (typeof Render.forceRefreshCardArt === "function") {
         Render.forceRefreshCardArt(EL["roll-stage"]);
     }
@@ -647,7 +642,6 @@ function renderPrep() {
     Render.teamSlots(EL["team-slots"], picks, id => { SFX.back(); togglePick(id); });
     Render.typeChart(EL["type-chart"]);
 
-    // ← FORCE refresh card art cho roster
     if (typeof Render.forceRefreshCardArt === "function") {
         Render.forceRefreshCardArt(EL["roster-grid"]);
     }
@@ -725,6 +719,11 @@ function chipsFor(f, hp) {
     if (f.exposeTurns > 0) chips.push({ cls: "expose", text: "⚠️ KHƠI MỞ" });
     if (f.stunTurns > 0) chips.push({ cls: "stun", text: "💫 CHOÁNG (" + f.stunTurns + ")" });
     if (f.freezeTurns > 0) chips.push({ cls: "freeze", text: "❄️ ĐÓNG BĂNG (" + f.freezeTurns + ")" });
+    if (f.buffAtk > 0) chips.push({ cls: "", text: "⚔️ ATK +" + Math.round(f.buffAtk * 100) + "%" });
+    if (f.buffDef > 0) chips.push({ cls: "", text: "🛡 DEF +" + Math.round(f.buffDef * 100) + "%" });
+    if (f.debuffAtk > 0) chips.push({ cls: "", text: "📉 ATK -" + Math.round(f.debuffAtk * 100) + "%" });
+    if (f.debuffDef > 0) chips.push({ cls: "", text: "💔 DEF -" + Math.round(f.debuffDef * 100) + "%" });
+    if (f.energyBonus > 0) chips.push({ cls: "", text: "⚡ +" + f.energyBonus + " ENERGY" });
     if (hp <= 0) chips.push({ cls: "", text: "✕ GỤC" });
     return chips;
 }
@@ -770,7 +769,7 @@ function renderAll() { renderHud(0); renderHud(1); renderSprites(); }
 function basicMove(f) {
     return {
         name: "Đòn Thường", kind: "attack", type: f.type, dmg: 40, cost: 0,
-        pp: Infinity, currentPp: Infinity, desc: "Đòn đánh cơ bản, không tốn PP — dùng khi mọi kỹ năng đã hết PP."
+        pp: Infinity, currentPp: Infinity, desc: "Đòn đánh cơ bản, không tốn PP."
     };
 }
 function lockText() {
@@ -798,17 +797,21 @@ function menuSpec() {
             else if (mv.heal) power = "💚+" + mv.heal;
             else if (mv.reflect) power = "🔮" + Math.round(mv.reflect * 100) + "%";
             else if (mv.effect) power = EFFECT_ICON[mv.effect] || "✨";
+            else if (mv.kind === "passive") power = "♾️ PASSIVE";
 
             let eff = null;
             if (isAttackMove(mv) && mv.dmg) eff = advInfo(mv.type, foe.type);
+
+            const isPassive = mv.kind === "passive";
 
             return {
                 i, name: mv.name, typeKey: mv.type,
                 kind: mv.kind || (mv.dmg ? "attack" : mv.shield ? "guard" : "status"),
                 power,
-                noPp: mv.currentPp <= 0,
-                pp: mv.pp === Infinity ? "∞ PP" : mv.currentPp + "/" + mv.pp + " PP",
-                desc: mv.desc, eff
+                noPp: isPassive || mv.currentPp <= 0,
+                pp: mv.pp === Infinity ? "∞ PP" : (isPassive ? "PASSIVE" : mv.currentPp + "/" + mv.pp + " PP"),
+                desc: mv.desc, eff,
+                isPassive
             };
         };
         const moves = f.moves.map(toSpec);
@@ -826,7 +829,12 @@ function refreshMenu() {
             else if (kind === "switch") { SFX.click(); openSwitch("normal"); }
             else if (kind === "log") { SFX.click(); EL["ov-log"].classList.add("show"); }
             else if (kind === "back") { SFX.back(); menuMode = "root"; refreshMenu(); }
-            else if (kind === "move") { SFX.select(); submitChoice({ kind: "attack", moveIdx: idx }); }
+            else if (kind === "move") {
+                const f = M.teams[mySide][M.active[mySide]];
+                if (idx >= 0 && f.moves[idx] && f.moves[idx].kind === "passive") return;
+                SFX.select();
+                submitChoice({ kind: "attack", moveIdx: idx });
+            }
         },
         onHover: i => {
             const ff = M.teams[mySide][M.active[mySide]];
@@ -877,7 +885,7 @@ function submitChoice(choice) {
         if (choice.to === M.active[mySide] || M.teams[mySide][choice.to].fainted) return;
     } else if (choice.kind === "attack" && choice.moveIdx >= 0) {
         const mv = M.teams[mySide][M.active[mySide]].moves[choice.moveIdx];
-        if (!mv || mv.currentPp <= 0) return;
+        if (!mv || mv.currentPp <= 0 || mv.kind === "passive") return;
     }
     myTurnReady = true;
     menuMode = "root";
@@ -988,6 +996,7 @@ function tickStatus(f) {
     if (f.buffDefTurns > 0) { f.buffDefTurns--; if (f.buffDefTurns === 0) f.buffDef = 0; }
     if (f.debuffAtkTurns > 0) { f.debuffAtkTurns--; if (f.debuffAtkTurns === 0) f.debuffAtk = 0; }
     if (f.debuffDefTurns > 0) { f.debuffDefTurns--; if (f.debuffDefTurns === 0) f.debuffDef = 0; }
+    if (f.energyBonus > 0) f.energyBonus = 0;
 }
 
 function resolveTurn(ch0, ch1) {
@@ -1037,6 +1046,8 @@ function resolveTurn(ch0, ch1) {
         if (!move || (move.currentPp !== undefined && move.currentPp <= 0)) move = basicMove(atkF);
         if (move.currentPp !== undefined && isFinite(move.currentPp)) move.currentPp--;
 
+        if (move.kind === "passive") continue;
+
         if (atkF.confuseTurns > 0 && Math.random() < 0.3) {
             const selfDmg = Math.round((move.dmg || 40) * 0.4);
             atkF.hp = Math.max(0, atkF.hp - selfDmg);
@@ -1045,46 +1056,93 @@ function resolveTurn(ch0, ch1) {
             continue;
         }
 
-        if (isAttackMove(move) && (move.dmg || move.effect === "expose" || move.effect === "burn" || move.effect === "poison" || move.effect === "stun")) {
+        // ===== HYBRID SKILL EXECUTION =====
+        const hasDamage = move.dmg && move.dmg > 0;
+        const hasShield = move.shield && move.shield > 0;
+        const hasHeal = move.heal && move.heal > 0;
+        const hasEffect = !!move.effect;
+        const hasBuffSelf = !!move.buffSelf;
+
+        // 1) Damage
+        if (hasDamage) {
             const ev = applyAttack(s, move);
             events.push(ev);
             if (ev.faint) events.push({ t: "faint", side: ev.targetSide, target: ev.target });
             if (ev.attackerFaint) events.push({ t: "faint", side: s, target: M.active[s] });
-        } else if (isGuardMove(move)) {
-            atkF.shield += move.shield || 0;
+        }
+
+        // 2) Shield
+        if (hasShield && !atkF.fainted) {
+            atkF.shield += move.shield;
             atkF.shieldTurns = BALANCE.SHIELD_TURNS;
             if (move.reflect) atkF.reflect = move.reflect;
             events.push({
                 t: "guard", side: s, moveName: move.name,
-                amount: move.shield || 0, shieldAfter: atkF.shield,
+                amount: move.shield, shieldAfter: atkF.shield,
                 reflect: move.reflect || 0
             });
-        } else if (isStatusMove(move)) {
-            if (move.heal) {
-                const before = atkF.hp;
-                atkF.hp = Math.min(atkF.maxHp, atkF.hp + move.heal);
-                events.push({ t: "heal", side: s, moveName: move.name, amount: atkF.hp - before, hpAfter: atkF.hp });
-            }
-            if (move.effect === "buff_atk") {
-                atkF.buffAtk = (move.value || 0.2);
-                atkF.buffAtkTurns = move.turns || 3;
+        }
+
+        // 3) Heal
+        if (hasHeal && !atkF.fainted) {
+            const before = atkF.hp;
+            atkF.hp = Math.min(atkF.maxHp, atkF.hp + move.heal);
+            events.push({ t: "heal", side: s, moveName: move.name, amount: atkF.hp - before, hpAfter: atkF.hp });
+        }
+
+        // 4) Buff self
+        if (hasBuffSelf && !atkF.fainted) {
+            const b = move.buffSelf;
+            if (b.stat === "dmg") {
+                atkF.buffAtk = b.value;
+                atkF.buffAtkTurns = b.turns || 1;
                 events.push({ t: "buff", side: s, stat: "atk", value: atkF.buffAtk, turns: atkF.buffAtkTurns });
-            }
-            if (move.effect === "buff_def") {
-                atkF.buffDef = (move.value || 0.2);
-                atkF.buffDefTurns = move.turns || 3;
+            } else if (b.stat === "def") {
+                atkF.buffDef = b.value;
+                atkF.buffDefTurns = b.turns || 1;
                 events.push({ t: "buff", side: s, stat: "def", value: atkF.buffDef, turns: atkF.buffDefTurns });
             }
-            if (move.effect === "debuff_atk") {
-                defF.debuffAtk = (move.value || 0.2);
-                defF.debuffAtkTurns = move.turns || 3;
-                events.push({ t: "debuff", side: 1 - s, stat: "atk", value: defF.debuffAtk, turns: defF.debuffAtkTurns });
+        }
+
+        // 5) Effect on enemy khi không gây dmg
+        if (hasEffect && !hasDamage) {
+            const chance = (move.chance != null ? move.chance : 1);
+            const success = Math.random() < chance;
+
+            if (move.effect === "stun") {
+                if (success) {
+                    defF.stunTurns = (defF.stunTurns || 0) + (move.turns || 1) + 1;
+                    events.push({ t: "effect_stun", side: 1 - s, target: M.active[1 - s], name: defF.name });
+                } else events.push({ t: "effect_miss", side: 1 - s, name: defF.name, effect: "stun" });
             }
-            if (move.effect === "debuff_def") {
-                defF.debuffDef = (move.value || 0.2);
-                defF.debuffDefTurns = move.turns || 3;
-                events.push({ t: "debuff", side: 1 - s, stat: "def", value: defF.debuffDef, turns: defF.debuffDefTurns });
+            if (move.effect === "expose") {
+                if (success) {
+                    defF.exposeTurns = BALANCE.EXPOSE_TURNS + 1;
+                    events.push({ t: "effect_expose", side: 1 - s, target: M.active[1 - s] });
+                } else events.push({ t: "effect_miss", side: 1 - s, name: defF.name, effect: "expose" });
             }
+        }
+
+        // 6) Buff/Debuff stat cũ
+        if (move.effect === "buff_atk" && !atkF.fainted) {
+            atkF.buffAtk = (move.value || 0.2);
+            atkF.buffAtkTurns = move.turns || 3;
+            events.push({ t: "buff", side: s, stat: "atk", value: atkF.buffAtk, turns: atkF.buffAtkTurns });
+        }
+        if (move.effect === "buff_def" && !atkF.fainted) {
+            atkF.buffDef = (move.value || 0.2);
+            atkF.buffDefTurns = move.turns || 3;
+            events.push({ t: "buff", side: s, stat: "def", value: atkF.buffDef, turns: atkF.buffDefTurns });
+        }
+        if (move.effect === "debuff_atk" && !defF.fainted) {
+            defF.debuffAtk = (move.value || 0.2);
+            defF.debuffAtkTurns = move.turns || 3;
+            events.push({ t: "debuff", side: 1 - s, stat: "atk", value: defF.debuffAtk, turns: defF.debuffAtkTurns });
+        }
+        if (move.effect === "debuff_def" && !defF.fainted) {
+            defF.debuffDef = (move.value || 0.2);
+            defF.debuffDefTurns = move.turns || 3;
+            events.push({ t: "debuff", side: 1 - s, stat: "def", value: defF.debuffDef, turns: defF.debuffDefTurns });
         }
     }
 
@@ -1142,6 +1200,7 @@ function applyAttack(side, move) {
 
     const hits = Math.max(1, move.multiHit || 1);
     let totalDmg = 0, totalAbsorbed = 0, anyCrit = false, anySuper = false, anyResist = false;
+    let passiveTriggered = false;
 
     for (let h = 0; h < hits; h++) {
         const mult = typeMultiplier(move.type, defF.type);
@@ -1164,6 +1223,24 @@ function applyAttack(side, move) {
 
         const fixedResist = defF.resistFixed || 0;
         if (fixedResist > 0) dmg = Math.max(1, dmg - fixedResist);
+
+        // ⭐ PASSIVE: giảm sát thương nhận vào
+        if (defF.damageReduction > 0) {
+            const before = dmg;
+            dmg = Math.max(1, Math.round(dmg * (1 - defF.damageReduction)));
+            if (before !== dmg) passiveTriggered = true;
+        }
+
+        // ⭐ PASSIVE: nhận thêm sát thương
+        if (defF.extraDamageTaken > 0) {
+            dmg += defF.extraDamageTaken;
+            passiveTriggered = true;
+        }
+
+        // ⭐ PASSIVE: energy_on_hit
+        if (defF.passiveEffect === "energy_on_hit") {
+            defF.energyBonus = (defF.energyBonus || 0) + 1;
+        }
 
         let absorbed = 0;
         if (defF.shield > 0) {
@@ -1189,7 +1266,10 @@ function applyAttack(side, move) {
         dmg: totalDmg, absorbed: totalAbsorbed,
         hits,
         hpAfter: defF.hp, shieldAfter: defF.shield,
-        effect: move.effect || null, faint: false
+        effect: move.effect || null, faint: false,
+        passiveTriggered: passiveTriggered,
+        defId: defF.id,
+        atkId: atkF.id
     };
 
     if (move.effect === "expose") { defF.exposeTurns = BALANCE.EXPOSE_TURNS + 1; ev.exposeApplied = true; }
@@ -1202,36 +1282,28 @@ function applyAttack(side, move) {
         if (Math.random() < chance) {
             defF.stunTurns = (defF.stunTurns || 0) + (move.turns || 1) + 1;
             ev.stunApplied = true;
-        } else {
-            ev.stunMissed = true;
-        }
+        } else ev.stunMissed = true;
     }
     if (move.effect === "freeze") {
         const chance = (move.chance != null ? move.chance : 1);
         if (Math.random() < chance) {
             defF.freezeTurns = (defF.freezeTurns || 0) + (move.turns || 1) + 1;
             ev.freezeApplied = true;
-        } else {
-            ev.freezeMissed = true;
-        }
+        } else ev.freezeMissed = true;
     }
     if (move.effect === "paralyze") {
         const chance = (move.chance != null ? move.chance : 1);
         if (Math.random() < chance) {
             defF.paralyzeTurns = (defF.paralyzeTurns || 0) + (move.turns || 2);
             ev.paralyzeApplied = true;
-        } else {
-            ev.paralyzeMissed = true;
-        }
+        } else ev.paralyzeMissed = true;
     }
     if (move.effect === "confuse") {
         const chance = (move.chance != null ? move.chance : 1);
         if (Math.random() < chance) {
             defF.confuseTurns = (defF.confuseTurns || 0) + (move.turns || 2);
             ev.confuseApplied = true;
-        } else {
-            ev.confuseMissed = true;
-        }
+        } else ev.confuseMissed = true;
     }
 
     if (move.drain) {
@@ -1252,6 +1324,146 @@ function applyAttack(side, move) {
 
     if (defF.hp <= 0) { defF.fainted = true; ev.faint = true; }
     return ev;
+}
+
+// ============================================================
+//  VFX SYSTEM — Animation theo hệ
+// ============================================================
+function getSceneRect(side) {
+    const scene = EL.scene;
+    if (!scene) return null;
+    const el = spriteOf(side !== undefined ? side : mySide);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const rs = scene.getBoundingClientRect();
+    return { x: r.left - rs.left + r.width / 2, y: r.top - rs.top + r.height / 2 };
+}
+
+function spawnVFX(html, x, y, duration) {
+    const scene = EL.scene;
+    if (!scene) return;
+    const d = document.createElement("div");
+    d.className = "vfx-layer";
+    d.innerHTML = html;
+    d.style.left = x + "px";
+    d.style.top = y + "px";
+    scene.appendChild(d);
+    setTimeout(() => { try { d.remove(); } catch (e) { } }, duration || 1000);
+}
+
+const TYPE_VFX = {
+    FIRE: (x, y) => spawnVFX(`
+        <div class="vfx-fire">
+            <div class="flame f1"></div><div class="flame f2"></div>
+            <div class="flame f3"></div><div class="flame f4"></div>
+            <div class="flame f5"></div>
+        </div>`, x, y, 900),
+    WATER: (x, y) => spawnVFX(`
+        <div class="vfx-water">
+            <div class="drop d1"></div><div class="drop d2"></div>
+            <div class="drop d3"></div><div class="drop d4"></div>
+            <div class="wave"></div>
+        </div>`, x, y, 900),
+    GRASS: (x, y) => spawnVFX(`
+        <div class="vfx-grass">
+            <div class="leaf l1">🍃</div><div class="leaf l2">🍃</div>
+            <div class="leaf l3">🍃</div><div class="leaf l4">🍃</div>
+            <div class="vine"></div>
+        </div>`, x, y, 900),
+    DARK_WIND: (x, y) => spawnVFX(`
+        <div class="vfx-dark">
+            <div class="dark-orb o1"></div><div class="dark-orb o2"></div>
+            <div class="dark-orb o3"></div>
+            <div class="wind w1"></div><div class="wind w2"></div>
+        </div>`, x, y, 900),
+    LIGHT: (x, y) => spawnVFX(`
+        <div class="vfx-light">
+            <div class="ray r1"></div><div class="ray r2"></div>
+            <div class="ray r3"></div><div class="ray r4"></div>
+            <div class="star">✨</div>
+        </div>`, x, y, 900),
+    GROUND: (x, y) => spawnVFX(`
+        <div class="vfx-ground">
+            <div class="rock r1">🪨</div><div class="rock r2">🪨</div>
+            <div class="rock r3">🪨</div><div class="crack"></div>
+        </div>`, x, y, 900),
+    DRAGON: (x, y) => spawnVFX(`
+        <div class="vfx-dragon">
+            <div class="dragon-breath"></div>
+            <div class="dragon-spark s1">✦</div>
+            <div class="dragon-spark s2">✦</div>
+            <div class="dragon-spark s3">✦</div>
+        </div>`, x, y, 1000),
+    UNDEAD: (x, y) => spawnVFX(`
+        <div class="vfx-undead">
+            <div class="skull k1">💀</div>
+            <div class="skull k2">💀</div>
+            <div class="skull k3">💀</div>
+            <div class="purple-aura"></div>
+        </div>`, x, y, 1000)
+};
+
+function playTypeVFX(typeKey, side) {
+    const pos = getSceneRect(side !== undefined ? side : oppSide());
+    if (!pos) return;
+    const fn = TYPE_VFX[typeKey];
+    if (fn) fn(pos.x, pos.y);
+}
+
+function playShieldVFX(side) {
+    const pos = getSceneRect(side);
+    if (!pos) return;
+    spawnVFX(`<div class="vfx-shield">
+        <div class="hex"></div><div class="hex"></div><div class="hex"></div>
+    </div>`, pos.x, pos.y, 1200);
+}
+
+function playHealVFX(side) {
+    const el = spriteOf(side);
+    const scene = EL.scene;
+    if (!el || !scene) return;
+    const r = el.getBoundingClientRect();
+    const rs = scene.getBoundingClientRect();
+    for (let i = 0; i < 8; i++) {
+        const d = document.createElement("div");
+        d.className = "vfx-heal-particle";
+        d.textContent = "✚";
+        d.style.left = (r.left - rs.left + r.width / 2 + (Math.random() - 0.5) * 100) + "px";
+        d.style.top = (r.top - rs.top + r.height) + "px";
+        d.style.animationDelay = (i * 0.06) + "s";
+        scene.appendChild(d);
+        setTimeout(() => { try { d.remove(); } catch (e) { } }, 1400);
+    }
+}
+
+function playBuffVFX(side) {
+    const pos = getSceneRect(side);
+    if (!pos) return;
+    spawnVFX(`<div class="vfx-buff">
+        <div class="arrow-up">▲</div><div class="arrow-up">▲</div><div class="arrow-up">▲</div>
+    </div>`, pos.x, pos.y, 1000);
+}
+
+function playDebuffVFX(side) {
+    const pos = getSceneRect(side);
+    if (!pos) return;
+    spawnVFX(`<div class="vfx-debuff">
+        <div class="arrow-down">▼</div><div class="arrow-down">▼</div><div class="arrow-down">▼</div>
+    </div>`, pos.x, pos.y, 1000);
+}
+
+function playPassiveVFX(side, passiveId) {
+    const pos = getSceneRect(side);
+    if (!pos) return;
+    let inner;
+    if (passiveId === "long_the_luc_that") {
+        inner = `<div class="aura purple"></div><div class="passive-text">VẢY RỒNG</div>`;
+    } else if (passiveId === "kho_lau_cot_de") {
+        inner = `<div class="aura red"></div><div class="passive-text">XƯƠNG SƯỜN</div>`;
+    } else {
+        inner = `<div class="aura purple"></div><div class="passive-text">PASSIVE</div>`;
+    }
+    spawnVFX(`<div class="vfx-passive">${inner}</div>`, pos.x, pos.y, 1200);
 }
 
 // ============================================================
@@ -1319,7 +1531,7 @@ function autoAct() {
     }
     const opts = [];
     f.moves.forEach((m, i) => {
-        if (m.currentPp > 0) opts.push({ i, w: isAttackMove(m) ? 4 : 1 });
+        if (m.currentPp > 0 && m.kind !== "passive") opts.push({ i, w: isAttackMove(m) ? 4 : 1 });
     });
     opts.push({ i: -1, w: 4 });
     let total = opts.reduce((a, o) => a + o.w, 0), r = Math.random() * total, pick = opts[0];
@@ -1341,6 +1553,9 @@ function playEvent(ev) {
         case "confuse": return playConfuse(ev);
         case "buff": return playBuff(ev);
         case "debuff": return playDebuff(ev);
+        case "effect_stun": return playEffectStun(ev);
+        case "effect_expose": return playEffectExpose(ev);
+        case "effect_miss": return playEffectMiss(ev);
         default: return sleep(150);
     }
 }
@@ -1374,9 +1589,13 @@ async function playAttack(ev) {
 
     await say([tag(ev.side), { text: `${ev.attacker} dùng ${ev.move.name}!` }], 14);
     SFX.charge();
+
     atkEl.classList.add(ev.side === mySide ? "atk-p" : "atk-e");
     await sleep(230);
+
     SFX.shoot();
+    // VFX theo hệ — hiện tại vị trí defender
+    playTypeVFX(ev.move.type, ev.targetSide);
     if (ev.move.kind === "attack") await shoot(atkEl, defEl, T.color);
     await sleep(170);
     atkEl.classList.remove("atk-p", "atk-e");
@@ -1389,6 +1608,14 @@ async function playAttack(ev) {
     if (ev.absorbed > 0) popupAt(ev.targetSide, "🛡 " + ev.absorbed, "crit");
     if (ev.dmg > 0) popupAt(ev.targetSide, "-" + ev.dmg + (ev.hits > 1 ? " x" + ev.hits : ""), ev.crit ? "crit" : "");
     if (ev.crit) popupAt(ev.targetSide, "CRIT!", "crit");
+
+    // Passive VFX
+    if (ev.passiveTriggered && ev.defId) {
+        playPassiveVFX(ev.targetSide, ev.defId);
+        SFX.passive();
+        const pname = ev.defId === "long_the_luc_that" ? "Vảy Rồng Bất Hoại" : (ev.defId === "kho_lau_cot_de" ? "Xương Sườn Nhạy Cảm" : "Passive");
+        await say([{ text: `✨ ${pname} kích hoạt!`, cls: "eff" }]);
+    }
 
     view[ev.targetSide].hp[ev.target] = ev.hpAfter;
     view[ev.targetSide].shield[ev.target] = ev.shieldAfter;
@@ -1413,7 +1640,7 @@ async function playAttack(ev) {
         const cur = view[ev.side].hp[M.active[ev.side]];
         view[ev.side].hp[M.active[ev.side]] = Math.min(M.teams[ev.side][M.active[ev.side]].maxHp, cur + ev.drain);
         renderHud(ev.side);
-        SFX.heal(); popupAt(ev.side, "+" + ev.drain, "heal");
+        SFX.heal(); playHealVFX(ev.side); popupAt(ev.side, "+" + ev.drain, "heal");
         await say([{ text: `🩸 ${ev.attacker} hút ${ev.drain} HP!`, cls: "eff" }]);
     }
     if (ev.reflectDmg) {
@@ -1437,6 +1664,7 @@ async function playGuard(ev) {
     if (ev.reflect) text += ` (Phản đòn ${Math.round(ev.reflect * 100)}%)`;
     await say([tag(ev.side), { text }]);
     SFX.shield();
+    playShieldVFX(ev.side);
     view[ev.side].shield[M.active[ev.side]] = ev.shieldAfter;
     renderHud(ev.side);
     popupAt(ev.side, "🛡", "heal");
@@ -1449,6 +1677,7 @@ async function playGuard(ev) {
 async function playHeal(ev) {
     await say([tag(ev.side), { text: `${ev.moveName}! Hồi phục ${ev.amount} HP.` }]);
     SFX.heal();
+    playHealVFX(ev.side);
     view[ev.side].hp[M.active[ev.side]] = ev.hpAfter;
     renderHud(ev.side);
     popupAt(ev.side, "+" + ev.amount, "heal");
@@ -1534,19 +1763,37 @@ async function playConfuse(ev) {
 async function playBuff(ev) {
     const statName = ev.stat === "atk" ? "tấn công" : "phòng thủ";
     await say([tag(ev.side), { text: `${ev.side === mySide ? "Bạn" : "Đối thủ"} tăng ${statName} +${Math.round(ev.value * 100)}% (${ev.turns} lượt)!`, cls: "eff" }]);
-    SFX.heal();
+    SFX.buff();
+    playBuffVFX(ev.side);
     popupAt(ev.side, "⬆️ " + statName.toUpperCase(), "heal");
     await sleep(500);
 }
 async function playDebuff(ev) {
     const statName = ev.stat === "atk" ? "tấn công" : "phòng thủ";
     await say([tag(ev.side), { text: `${ev.side === mySide ? "Bạn" : "Đối thủ"} bị giảm ${statName} -${Math.round(ev.value * 100)}% (${ev.turns} lượt)!`, cls: "crit" }]);
-    SFX.back();
+    SFX.debuff();
+    playDebuffVFX(ev.side);
     popupAt(ev.side, "⬇️ " + statName.toUpperCase(), "crit");
     await sleep(500);
 }
+async function playEffectStun(ev) {
+    await say([tag(1 - ev.side), { text: `${ev.name} bị CHOÁNG!`, cls: "crit" }]);
+    SFX.stun();
+    playTypeVFX("LIGHT", ev.side);
+    await sleep(500);
+}
+async function playEffectExpose(ev) {
+    await say([tag(1 - ev.side), { text: `${(1 - ev.side) === mySide ? "Quái của bạn" : "Đối thủ"} bị KHƠI MỞ!`, cls: "crit" }]);
+    SFX.debuff();
+    playDebuffVFX(ev.side);
+    await sleep(500);
+}
+async function playEffectMiss(ev) {
+    await say([{ text: `Hiệu ứng ${ev.effect} lên ${ev.name} đã trượt...`, cls: "noeff" }]);
+    await sleep(300);
+}
 
-// ---------- VFX ----------
+// ---------- VFX BASIC ----------
 function popupAt(side, text, cls) {
     const el = spriteOf(side), scene = EL.scene;
     if (!el || !scene) return;
@@ -1561,7 +1808,7 @@ function popupAt(side, text, cls) {
         { transform: "translateY(0) scale(.7)", opacity: 0 },
         { transform: "translateY(-18px) scale(1.15)", opacity: 1, offset: 0.25 },
         { transform: "translateY(-62px) scale(1)", opacity: 0 }
-    ], { duration: 950, easing: "ease-out" }).finished.then(() => d.remove()).catch(() => { });
+    ], { duration: 950, easing: "ease-out" }).finished.then(() => { try { d.remove(); } catch (e) { } }).catch(() => { });
 }
 function shoot(fromEl, toEl, color) {
     const scene = EL.scene;
@@ -1580,7 +1827,7 @@ function shoot(fromEl, toEl, color) {
         { transform: "translate(0,0) scale(.5) rotate(0deg)" },
         { transform: `translate(${dx * .5}px, ${dy * .5 - 40}px) scale(1.15) rotate(220deg)`, offset: 0.5 },
         { transform: `translate(${dx}px, ${dy}px) scale(.85) rotate(420deg)` }
-    ], { duration: 460, easing: "cubic-bezier(.35,.05,.6,1)" }).finished.then(() => p.remove()).catch(() => { });
+    ], { duration: 460, easing: "cubic-bezier(.35,.05,.6,1)" }).finished.then(() => { try { p.remove(); } catch (e) { } }).catch(() => { });
 }
 
 // ============================================================
@@ -1626,15 +1873,15 @@ function aiChoose(side) {
         const to = aiPickSwitch(side, threat, false);
         if (to !== M.active[side]) return { kind: "switch", to };
     }
-    const healIdx = f.moves.findIndex(m => m.heal && m.currentPp > 0);
+    const healIdx = f.moves.findIndex(m => m.heal && m.currentPp > 0 && m.kind !== "passive");
     if (healIdx >= 0 && hpR < 0.45 && Math.random() < 0.85) return { kind: "attack", moveIdx: healIdx };
-    const guardIdx = f.moves.findIndex(m => m.shield && m.currentPp > 0);
+    const guardIdx = f.moves.findIndex(m => m.shield && m.currentPp > 0 && m.kind !== "passive");
     if (guardIdx >= 0 && f.shield === 0 && (hpR < 0.4 || threat.dmg > f.hp * 0.45) && Math.random() < 0.75)
         return { kind: "attack", moveIdx: guardIdx };
 
     const opts = [];
     f.moves.forEach((m, i) => {
-        if (!isAttackMove(m) || m.currentPp <= 0) return;
+        if (!isAttackMove(m) || m.currentPp <= 0 || m.kind === "passive") return;
         const mult = typeMultiplier(m.type, tf.type);
         let score = (m.dmg || 40) * mult;
         if (m.effect === "expose") score += 22;
@@ -1643,6 +1890,8 @@ function aiChoose(side) {
         if (m.effect === "freeze") score += 45;
         if (m.drain) score += 15;
         if (m.reflect) score += 30;
+        if (m.shield && !m.dmg) score += 18;
+        if (m.heal && !m.dmg) score += 22;
         if (m.multiHit) score *= (1 + (m.multiHit - 1) * 0.5);
         score *= (0.85 + Math.random() * 0.3);
         opts.push({ i, score });
@@ -1786,7 +2035,6 @@ function boot() {
     renderFriends("");
     setStatus("Đang tải thẻ...");
     applyDebugHooks();
-    // Đợi 1.5s cho initAssets probe xong rồi mới cho phép tương tác
     setTimeout(() => {
         assetsReady = true;
         setStatus("Xin chào " + (profile.name || "huấn luyện viên") + "! Mã đăng ký: " + profile.code);

@@ -163,7 +163,7 @@ const MONSTER_ROSTER = [
             { name: "Thánh Quang Trị Liệu", kind: "status", type: "LIGHT", heal: 65, cost: 2, pp: 4, desc: "Hồi 65 HP bằng ánh sáng thánh." }
         ]
     },
-	    // ============================================================
+    // ============================================================
     //  LONG THỂ LỰC THẤT — Pokémon Long Thần (DRAGON / FIRE)
     // ============================================================
     {
@@ -173,6 +173,7 @@ const MONSTER_ROSTER = [
         type: "DRAGON",
         hp: 220, spd: 6, rarity: 3, dex: "017/220",
         flavor: "“Một long nhân dũng mãnh bảo vệ vương quốc.”",
+        resistFixed: 30,
         art: { shape: "dragon", body: "#2f9e44", belly: "#a3f0a8", accent: "#fbbf24", wings: true, aura: "#5fd36a" },
         moves: [
             {
@@ -182,7 +183,8 @@ const MONSTER_ROSTER = [
                 dmg: 210,
                 cost: 3,
                 pp: 4,
-                effect: "expose",
+                // ⭐ Buff bản thân +30% sát thương chiêu sau
+                buffSelf: { stat: "dmg", value: 0.3, turns: 1 },
                 desc: "Gây sát thương lớn cho kẻ địch và tăng 30% sát thương cho chiêu sau."
             },
             {
@@ -197,12 +199,14 @@ const MONSTER_ROSTER = [
             },
             {
                 name: "Vảy Rồng Bất Hoại",
-                kind: "guard",
+                kind: "passive",
                 type: "DRAGON",
-                shield: 0,
-                cost: 1,
-                pp: 5,
-                passive: true,
+                cost: 0,
+                pp: Infinity,
+                // ⭐ Passive: giảm 50% sát thương nhận vào
+                damageReduction: 0.5,
+                // ⭐ Passive: mỗi lần bị đánh tăng 1 năng lượng (giảm cost chiêu sau)
+                passiveEffect: "energy_on_hit",
                 desc: "Mỗi khi bị tấn công, giảm 50% sát thương và tăng 1 năng lượng trong lượt sau."
             }
         ]
@@ -217,6 +221,7 @@ const MONSTER_ROSTER = [
         type: "UNDEAD",
         hp: 180, spd: 5, rarity: 2, dex: "002/180",
         flavor: "“Không cần đẹp trai, chỉ cần mạnh. Khô Lâu Cốt Đế là hiện thân của sự thù hận và sức mạnh vĩnh hằng!”",
+        resistFixed: 30,
         art: { shape: "beast", body: "#4c1d95", belly: "#a78bfa", accent: "#c4b5fd", aura: "#8b5cf6" },
         moves: [
             {
@@ -238,17 +243,19 @@ const MONSTER_ROSTER = [
                 pp: 6,
                 effect: "stun",
                 chance: 0.4,
-                desc: "Nhảy lên cao và giảm mạnh xuống, tạo ra sóng chấn động. Đối thủ bị tê liệt."
+                desc: "Nhảy lên cao và giảm mạnh xuống, tạo ra sóng chấn động. 40% đối thủ bị tê liệt."
             },
             {
                 name: "Xương Sườn Nhạy Cảm",
-                kind: "guard",
+                kind: "passive",
                 type: "UNDEAD",
-                shield: 0,
-                cost: 1,
-                pp: 5,
-                passive: true,
-                desc: "Mỗi lần bị tấn công, 'Khô Lâu Cốt Đế' nhận thêm 10 sát thương, nhưng được tăng 1 năng lượng trong lượt sau."
+                cost: 0,
+                pp: Infinity,
+                // ⭐ Passive: nhận thêm 10 sát thương
+                extraDamageTaken: 10,
+                // ⭐ Passive: mỗi lần bị đánh tăng 1 năng lượng
+                passiveEffect: "energy_on_hit",
+                desc: "Mỗi lần bị tấn công, nhận thêm 10 sát thương, nhưng được tăng 1 năng lượng trong lượt sau."
             }
         ]
     },
@@ -293,10 +300,14 @@ function makeFighter(id) {
         debuffDef: 0, debuffDefTurns: 0,
         reflect: 0,
         dot: null,
-        fainted: false
+        fainted: false,
+        // ⭐ THÊM: cho passive
+        energyBonus: 0,           // năng lượng cộng thêm (giảm cost)
+        damageReduction: 0,       // % giảm sát thương nhận (passive)
+        extraDamageTaken: 0,      // sát thương cộng thêm nhận vào (passive)
+        passiveEffect: null       // loại passive
     };
 }
-
 function typeMultiplier(moveType, defType) {
     const T = TYPES[moveType];
     if (!T) return 1;

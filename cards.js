@@ -283,7 +283,9 @@ const MONSTER_INDEX = {};
 MONSTER_ROSTER.forEach(m => { MONSTER_INDEX[m.id] = m; });
 
 function makeFighter(id) {
-    const t = findMonster(id);
+    const t = (typeof getDexMonsterFull === "function" && typeof hasMonster === "function" && hasMonster(id))
+        ? getDexMonsterFull(id)
+        : findMonster(id);
     if (!t) return null;
     return {
         id: t.id, name: t.name, subtitle: t.subtitle, type: t.type,

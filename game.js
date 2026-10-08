@@ -1,14 +1,25 @@
 // game.js
 // ============================================================
-//  POKÉ DUEL — game loop, profile/ID, network, AI, animation
-//  V4: Fix hybrid skill + VFX riêng theo hệ + passive system
+//  TA5 BÁCH QUÁI — game loop, profile/ID, network, AI, animation
+//  V7: Wild battle dùng chung battle system (1v1 thật)
 // ============================================================
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------- DOM refs ----------
 const EL = {};
-["screen-lobby", "screen-roll", "screen-prep", "screen-battle",
+["screen-lobby", "screen-dex", "screen-team", "screen-world", "screen-wild",
+    "screen-roll", "screen-prep", "screen-battle",
+    "world-map", "world-player-level", "world-coins", "world-dex-count", "world-dex-total",
+    "btn-world", "btn-world-back",
+    "wild-scene", "wild-bg", "wild-sprite", "wild-zone-name", "wild-monster-name",
+    "wild-hp-fill", "wild-hp-text", "wild-msg", "wild-team-bar",
+    "btn-wild-attack", "btn-wild-capture", "btn-wild-run", "btn-wild-back",
+    "ov-wild-result", "wild-result-title", "wild-result-body",
+    "btn-wild-continue", "btn-wild-home",
+    "dex-grid", "dex-stats", "dex-owned-count", "dex-all-count", "dex-trainer-name",
+    "btn-dex", "btn-dex-back", "btn-dex-team",
+    "team-roster", "team-slots-dex", "type-chart-dex", "btn-save-team", "team-status", "btn-team-back",
     "roll-stage", "roll-status", "roll-pity-badge", "roll-pity-count",
     "btn-roll-confirm", "btn-roll-reroll",
     "roster-grid", "team-slots", "type-chart", "btn-confirm-team", "prep-status", "btn-prep-back",
@@ -49,15 +60,20 @@ let autoPlay = false;
 let assetsReady = false;
 let rollMonsters = [];
 let rollPickedIdx = -1;
+let wildState = null;
+let dexTab = "owned";
+let teamPicks = [];
+let rosterQuery = "";
+let pendingWildRewards = null;
 
 // ============================================================
 //  PROFILE
 // ============================================================
-const PROFILE_KEY = "pokeduel_profile_v1";
+const PROFILE_KEY = "ta5bachquai_profile_v1";
 const ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 function genCode() {
-    let s = "PK";
-    for (let i = 0; i < 6; i++) s += ALPHA[Math.floor(Math.random() * ALPHA.length)];
+    let s = "TA5";
+    for (let i = 0; i < 5; i++) s += ALPHA[Math.floor(Math.random() * ALPHA.length)];
     return s;
 }
 function loadProfile() {
@@ -72,11 +88,11 @@ function saveProfile() {
 }
 function normCode(raw) {
     let s = String(raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-    if (s.indexOf("POKEDUEL") === 0) s = s.slice(8);
-    if (s.indexOf("PK") === 0 && s.length > 8) s = s.slice(0, 8);
+    if (s.indexOf("TA5BACHQUAI") === 0) s = s.slice(11);
+    if (s.indexOf("TA5") === 0 && s.length > 8) s = s.slice(0, 8);
     return s;
 }
-function peerIdFor(code) { return "pokeduel-" + normCode(code); }
+function peerIdFor(code) { return "ta5bachquai-" + normCode(code); }
 function rndId() { return Math.random().toString(36).slice(2, 8); }
 let profile = (typeof localStorage !== "undefined") ? loadProfile() : { name: "", code: genCode(), avatar: "🎒" };
 
@@ -137,6 +153,9 @@ const SFX = (() => {
         passive: () => { tone(880, 1320, 0.15, "sine", 0.05); tone(1320, 1760, 0.2, "sine", 0.04, 0.15); },
         buff: () => { tone(660, 990, 0.12, "square", 0.05); tone(990, 1320, 0.15, "square", 0.05, 0.1); },
         debuff: () => { tone(880, 440, 0.15, "sawtooth", 0.05); tone(440, 220, 0.2, "sawtooth", 0.05, 0.12); },
+        capture: () => { tone(500, 800, 0.1, "sine", 0.05); tone(800, 1200, 0.15, "sine", 0.05, 0.1); tone(1200, 1600, 0.2, "sine", 0.05, 0.25); },
+        levelup: () => [523, 659, 784, 1046, 1318].forEach((f, i) => tone(f, f, 0.14, "square", 0.06, i * 0.1)),
+        evolve: () => [440, 554, 659, 880, 1108].forEach((f, i) => tone(f, f, 0.2, "triangle", 0.07, i * 0.15)),
         win: () => [523, 659, 784, 1046].forEach((f, i) => tone(f, f, 0.17, "square", 0.06, i * 0.14)),
         lose: () => [400, 340, 270, 190].forEach((f, i) => tone(f, f * 0.9, 0.24, "triangle", 0.06, i * 0.18))
     };
@@ -146,7 +165,7 @@ const SFX = (() => {
 //  HELPERS
 // ============================================================
 function showScreen(name) {
-    ["lobby", "roll", "prep", "battle"].forEach(s => {
+    ["lobby", "dex", "team", "world", "wild", "roll", "prep", "battle"].forEach(s => {
         const el = EL["screen-" + s];
         if (el) el.classList.toggle("active", s === name);
     });
@@ -269,6 +288,62 @@ function renderLog() {
 }
 
 // ============================================================
+//  LEVEL UP / EVOLUTION VFX
+// ============================================================
+function showLevelUpBanner(monName, newLevel) {
+    const div = document.createElement("div");
+    div.className = "levelup-banner";
+    div.innerHTML = `
+        <div class="levelup-inner">
+            <div class="levelup-icon">⭐</div>
+            <div class="levelup-text">
+                <div class="levelup-name">${monName}</div>
+                <div class="levelup-lv">LÊN CẤP ${newLevel}!</div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(div);
+    SFX.levelup();
+    setTimeout(() => { try { div.remove(); } catch (e) { } }, 2400);
+}
+
+function showEvolutionCutscene(fromId, toId, newLevel, callback) {
+    const fromM = MONSTER_INDEX[fromId];
+    const toM = MONSTER_INDEX[toId];
+
+    const overlay = document.createElement("div");
+    overlay.className = "evolution-overlay";
+    overlay.innerHTML = `
+        <div class="evo-stage">
+            <div class="evo-sprite evo-from" style="background-image:${cssUrl(getSprite(fromId, MONSTER_INDEX))}"></div>
+            <div class="evo-arrow">➜</div>
+            <div class="evo-sprite evo-to" style="background-image:${cssUrl(getSprite(toId, MONSTER_INDEX))}"></div>
+        </div>
+        <div class="evo-title">TIẾN HÓA!</div>
+        <div class="evo-names">
+            <span class="evo-name-from">${fromM ? fromM.name : "?"}</span>
+            <span class="evo-arrow-text">→</span>
+            <span class="evo-name-to">${toM ? toM.name : "?"}</span>
+        </div>
+        <div class="evo-sub">Lv.${newLevel} · Sức mạnh mới đã thức tỉnh!</div>
+    `;
+    document.body.appendChild(overlay);
+    SFX.evolve();
+
+    setTimeout(() => {
+        overlay.classList.add("flash");
+    }, 800);
+
+    setTimeout(() => {
+        overlay.classList.add("fadeout");
+        setTimeout(() => {
+            try { overlay.remove(); } catch (e) { }
+            if (callback) callback();
+        }, 700);
+    }, 2800);
+}
+
+// ============================================================
 //  LOBBY
 // ============================================================
 function renderTrainerCard() {
@@ -302,7 +377,7 @@ function renderLobbyFan() {
 }
 
 // ---------- FRIENDS ----------
-const FRIEND_KEY = "pokeduel_friends_v1";
+const FRIEND_KEY = "ta5bachquai_friends_v1";
 function loadFriends() {
     try {
         const a = JSON.parse(localStorage.getItem(FRIEND_KEY));
@@ -378,7 +453,7 @@ function copyTextFallback(t, ok) {
 }
 function joinByCode(raw) {
     const code = normCode(raw);
-    if (!code) { setStatus("Nhập mã đăng ký của bạn bè (vd: PKXXXXXX)"); return; }
+    if (!code) { setStatus("Nhập mã đăng ký của bạn bè (vd: TA5XXXXX)"); return; }
     if (code === profile.code) { setStatus("Đây là mã của chính bạn — gửi mã này cho bạn bè để họ vào."); return; }
     SFX.click();
     closePeer();
@@ -396,13 +471,33 @@ function joinByCode(raw) {
 }
 
 function bindLobby() {
+    if (EL["btn-dex"]) {
+        EL["btn-dex"].addEventListener("click", () => {
+            SFX.select();
+            openDex();
+        });
+    }
+    if (EL["btn-world"]) {
+        EL["btn-world"].addEventListener("click", () => {
+            SFX.select();
+            openWorldMap();
+        });
+    }
     EL["btn-ai"].addEventListener("click", () => {
         if (!assetsReady) { setStatus("Đang tải thẻ, đợi 1 chút..."); return; }
         SFX.select();
         closePeer();
         mode = "ai"; isHost = true; mySide = 0;
-        setStatus("Chế độ đấu với Máy — roll thẻ nào!");
-        enterRoll();
+
+        const team = getTeam().filter(x => x);
+        if (team.length < BALANCE.TEAM_SIZE) {
+            setStatus("Chưa build team — hãy build team trước!");
+            openTeamBuilder();
+            return;
+        }
+
+        setStatus("Đấu với Máy — team từ Dex!");
+        enterPrep();
     });
     EL["btn-create"].addEventListener("click", () => {
         SFX.click();
@@ -445,9 +540,9 @@ function bindLobby() {
 
 function setupConnection() {
     conn.on("open", () => {
-        setStatus("Đã kết nối! Roll thẻ trước nào.");
+        setStatus("Đã kết nối! Chọn team rồi chiến.");
         sendAny({ type: "profile", name: profile.name || "Huấn Luyện Viên", code: profile.code });
-        enterRoll();
+        enterPrep(mode === "p2p" && isHost ? rndId() : null);
     });
     conn.on("data", handleData);
     conn.on("close", () => { setStatus("Đối thủ đã rời trận"); logAdd("--- Đối thủ ngắt kết nối ---"); });
@@ -469,11 +564,9 @@ function handleData(d) {
             break;
         case "rematchReq":
             if (isHost) {
-                enterRoll(); broadcast({ type: "roll" });
+                enterPrep(rndId());
+                broadcast({ type: "prep", prepId });
             }
-            break;
-        case "roll":
-            if (!isHost) enterRoll();
             break;
         case "team":
             if (mode === "p2p" && isHost && d.prepId === prepId) {
@@ -499,118 +592,246 @@ function handleData(d) {
 }
 
 // ============================================================
-//  ROLL SCREEN
+//  DEX SCREEN
 // ============================================================
-function rollMonstersFallback(count) {
-    const result = [];
-    for (let i = 0; i < count; i++) {
-        const m = MONSTER_ROSTER[Math.floor(Math.random() * MONSTER_ROSTER.length)];
-        result.push(m);
-    }
-    return result;
+function openDex() {
+    if (typeof initDex === "function") initDex();
+    showScreen("dex");
+    renderDex();
 }
 
-function enterRoll() {
-    if (!assetsReady) { setStatus("Đang tải thẻ, đợi chút..."); return; }
-    rollMonsters = (typeof rollMonsterPool === "function")
-        ? rollMonsterPool(ROLL_CONFIG.ROLL_COUNT)
-        : rollMonstersFallback(ROLL_CONFIG.ROLL_COUNT);
-    rollPickedIdx = -1;
-    picks = [];
-    showScreen("roll");
-    renderRoll(true);
-    updateRollPityBadge();
-    setStatus("Roll thẻ — chọn 1 con để bắt đầu!");
-}
-function updateRollPityBadge() {
-    const badge = EL["roll-pity-badge"];
-    const count = EL["roll-pity-count"];
-    if (!badge || !count) return;
-    const pity = (typeof getPityCounter === "function") ? getPityCounter() : 0;
-    if (pity > 0) {
-        badge.style.display = "flex";
-        count.textContent = pity + " / " + ROLL_CONFIG.PITY_THRESHOLD;
-    } else {
-        badge.style.display = "none";
-    }
-}
+function renderDex() {
+    if (typeof DEX === "undefined" || !DEX) return;
 
-function renderRoll(animate) {
-    if (!EL["roll-stage"]) return;
-    if (typeof Render.rollStage !== "function") {
-        console.error("[roll] Render.rollStage chưa load");
+    const stats = EL["dex-stats"];
+    if (stats) {
+        stats.innerHTML = `
+            <div class="dex-stat">Thắng <b>${DEX.stats.totalWins}</b></div>
+            <div class="dex-stat">Thua <b>${DEX.stats.totalLosses}</b></div>
+            <div class="dex-stat">Sở hữu <b>${getOwnedIds().length}</b>/${MONSTER_ROSTER.length}</div>
+            <div class="dex-stat">💰 <b>${DEX.currency.coins}</b></div>
+        `;
+    }
+
+    const tn = EL["dex-trainer-name"];
+    if (tn) tn.textContent = profile.name || "Bạn";
+
+    const owned = getOwnedIds();
+    if (EL["dex-owned-count"]) EL["dex-owned-count"].textContent = owned.length;
+    if (EL["dex-all-count"]) EL["dex-all-count"].textContent = MONSTER_ROSTER.length;
+
+    const grid = EL["dex-grid"];
+    if (!grid) return;
+
+    const list = dexTab === "owned"
+        ? MONSTER_ROSTER.filter(m => hasMonster(m.id))
+        : MONSTER_ROSTER;
+
+    if (!list.length) {
+        grid.innerHTML = `<div class="friend-empty" style="grid-column:1/-1;padding:40px">Chưa sở hữu quái nào — hãy đi đánh để bắt!</div>`;
         return;
     }
-    Render.rollStage(EL["roll-stage"], rollMonsters, {
-        onPick: (m, cardEl, i) => pickRollCard(m, cardEl, i),
-        animate: animate === true
-    });
 
-    if (rollPickedIdx >= 0) {
-        const cards = document.querySelectorAll("#roll-stage .pcard");
-        cards.forEach((c, i) => {
-            if (i === rollPickedIdx) c.classList.add("picked");
-            else c.classList.add("dimmed");
-        });
-        EL["btn-roll-confirm"].disabled = false;
-        const picked = rollMonsters[rollPickedIdx];
-        if (picked) EL["roll-status"].innerHTML = `Đã chọn: <b>${picked.name}</b> (R${picked.rarity || 1})`;
-    } else {
-        EL["btn-roll-confirm"].disabled = true;
-        EL["roll-status"].innerHTML = "Nhấn vào thẻ để chọn";
-    }
+    grid.innerHTML = list.map(m => {
+        const owned = hasMonster(m.id);
+        const entry = owned ? DEX.monsters[m.id] : null;
+
+        if (!owned) {
+            return `
+                <div class="dex-card locked" data-id="${m.id}">
+                    <div class="lock-overlay">🔒</div>
+                    ${Render.card(m, { dim: true })}
+                </div>`;
+        }
+
+        const full = getDexMonsterFull(m.id);
+        const expPct = Math.min(100, (entry.exp / entry.expToNext) * 100);
+        const canEvo = (typeof canEvolve === "function") ? canEvolve(m.id) : null;
+        const evoBadge = canEvo ? `<div class="dex-evo-badge" data-evo="${m.id}" title="Tiến hóa!">✨ EVO</div>` : "";
+
+        return `
+            <div class="dex-card" data-id="${m.id}">
+                <div class="dex-level">Lv.${entry.level}</div>
+                ${evoBadge}
+                ${Render.card(full, { holo: true })}
+                <div class="dex-exp"><i style="width:${expPct}%"></i></div>
+            </div>`;
+    }).join("");
 
     if (typeof Render.forceRefreshCardArt === "function") {
-        Render.forceRefreshCardArt(EL["roll-stage"]);
+        Render.forceRefreshCardArt(grid);
     }
-}
 
-function pickRollCard(m, cardEl, i) {
-    SFX.select();
-    document.querySelectorAll("#roll-stage .pcard").forEach(c => {
-        c.classList.remove("picked");
-        c.classList.remove("dimmed");
+    grid.querySelectorAll("[data-evo]").forEach(badge => {
+        badge.addEventListener("click", e => {
+            e.stopPropagation();
+            const id = badge.dataset.evo;
+            tryEvolve(id);
+        });
     });
-    cardEl.classList.add("picked");
-    document.querySelectorAll("#roll-stage .pcard").forEach(c => {
-        if (c !== cardEl) c.classList.add("dimmed");
+}
+
+function tryEvolve(id) {
+    if (typeof canEvolve !== "function" || typeof evolveMonster !== "function") {
+        setStatus("Evolution system chưa load!");
+        return;
+    }
+    const evo = canEvolve(id);
+    if (!evo) return;
+    if (evo.alreadyOwned) {
+        setStatus("Đã sở hữu form tiến hóa — không thể tiến hóa lại!");
+        return;
+    }
+
+    SFX.select();
+    const fromName = MONSTER_INDEX[id].name;
+
+    showEvolutionCutscene(id, evo.to, DEX.monsters[id].level, () => {
+        const result = evolveMonster(id);
+        if (result) {
+            setStatus(`${fromName} đã tiến hóa thành ${MONSTER_INDEX[evo.to].name}!`);
+            renderDex();
+        }
+    });
+}
+
+function bindDex() {
+    document.querySelectorAll(".dex-tab").forEach(tab => {
+        tab.addEventListener("click", () => {
+            SFX.click();
+            document.querySelectorAll(".dex-tab").forEach(t => t.classList.remove("active"));
+            tab.classList.add("active");
+            dexTab = tab.dataset.tab;
+            renderDex();
+        });
     });
 
-    rollPickedIdx = i;
-    EL["btn-roll-confirm"].disabled = false;
-    EL["roll-status"].innerHTML = `Đã chọn: <b>${m.name}</b> (R${m.rarity || 1})`;
-    cardEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
-}
-
-function confirmRoll() {
-    if (rollPickedIdx < 0) return;
-    const picked = rollMonsters[rollPickedIdx];
-    if (!picked) return;
-    SFX.select();
-    picks = [picked.id];
-    setStatus(`Đã chọn ${picked.name} — chọn thêm 2 con nữa!`);
-    enterPrep(mode === "p2p" && isHost ? rndId() : null);
-}
-
-function reroll() {
-    SFX.roll();
-    const exclude = rollMonsters.map(m => m && m.id).filter(Boolean);
-    rollMonsters = (typeof rollMonsterPool === "function")
-        ? rollMonsterPool(ROLL_CONFIG.ROLL_COUNT, exclude.length ? exclude : null)
-        : rollMonstersFallback(ROLL_CONFIG.ROLL_COUNT);
-    rollPickedIdx = -1;
-    renderRoll(true);
-    updateRollPityBadge();
-    setStatus("Đã roll lại!");
-}
-
-function bindRoll() {
-    if (EL["btn-roll-confirm"]) {
-        EL["btn-roll-confirm"].addEventListener("click", confirmRoll);
+    if (EL["btn-dex-back"]) {
+        EL["btn-dex-back"].addEventListener("click", () => {
+            SFX.back();
+            showScreen("lobby");
+        });
     }
-    if (EL["btn-roll-reroll"]) {
-        EL["btn-roll-reroll"].addEventListener("click", reroll);
+
+    if (EL["btn-dex-team"]) {
+        EL["btn-dex-team"].addEventListener("click", () => {
+            SFX.select();
+            openTeamBuilder();
+        });
     }
+}
+
+// ============================================================
+//  TEAM BUILDER
+// ============================================================
+function openTeamBuilder() {
+    if (typeof initDex === "function") initDex();
+    teamPicks = getTeam().filter(id => id).slice();
+    showScreen("team");
+    renderTeamBuilder();
+}
+
+function renderTeamBuilder() {
+    if (typeof DEX === "undefined" || !DEX) return;
+
+    const owned = getOwnedIds().map(id => getDexMonsterFull(id)).filter(Boolean);
+    owned.sort((a, b) => (b.level || 0) - (a.level || 0));
+
+    const rosterEl = EL["team-roster"];
+    if (rosterEl) {
+        rosterEl.innerHTML = owned.map(m => {
+            const idx = teamPicks.indexOf(m.id);
+            return `<div class="team-pick-wrap" data-id="${m.id}">${Render.card(m, {
+                selected: idx >= 0,
+                order: idx >= 0 ? idx + 1 : 0,
+                holo: idx >= 0,
+                dim: idx < 0 && teamPicks.length >= BALANCE.TEAM_SIZE
+            })}</div>`;
+        }).join("");
+
+        Array.from(rosterEl.children).forEach(elm => {
+            elm.addEventListener("click", () => toggleTeamPick(elm.dataset.id));
+        });
+
+        if (typeof Render.forceRefreshCardArt === "function") {
+            Render.forceRefreshCardArt(rosterEl);
+        }
+    }
+
+    const slotsEl = EL["team-slots-dex"];
+    if (slotsEl) {
+        const slots = [];
+        for (let i = 0; i < BALANCE.TEAM_SIZE; i++) {
+            const id = teamPicks[i];
+            if (!id) {
+                slots.push(`<div class="tslot"><span class="pos">${i + 1}</span>
+                    <span style="color:#5f6899;font-size:.8rem">— trống —</span></div>`);
+            } else {
+                const m = getDexMonsterFull(id);
+                const active = i === 0;
+                slots.push(`<div class="tslot filled ${active ? "active-slot" : ""}">
+                    <span class="pos">${i + 1}</span>
+                    <span class="thumb" style="${Render.thumbStyle(id)}"></span>
+                    <span class="tinfo"><span class="tn">${m.name}</span>
+                        <span class="thp">Lv.${m.level} · ${TYPES[m.type].icon} HP ${m.hp}${active ? " · <b style='color:#ffd75f'>ACTIVE</b>" : ""}</span></span>
+                    <button class="rm" data-rm="${id}" title="Bỏ chọn">✕</button></div>`);
+            }
+        }
+        slotsEl.innerHTML = slots.join("");
+        Array.from(slotsEl.querySelectorAll("[data-rm]")).forEach(b =>
+            b.addEventListener("click", e => {
+                e.stopPropagation();
+                SFX.back();
+                toggleTeamPick(b.dataset.rm);
+            }));
+    }
+
+    if (EL["type-chart-dex"]) {
+        Render.typeChart(EL["type-chart-dex"]);
+    }
+
+    const full = teamPicks.length === BALANCE.TEAM_SIZE;
+    if (EL["btn-save-team"]) EL["btn-save-team"].disabled = !full;
+    if (EL["team-status"]) {
+        EL["team-status"].innerHTML = full
+            ? "Đội hình đủ 3 con — sẵn sàng lưu!"
+            : `Chọn thêm <b>${BALANCE.TEAM_SIZE - teamPicks.length}</b> con nữa`;
+    }
+}
+
+function toggleTeamPick(id) {
+    const i = teamPicks.indexOf(id);
+    if (i >= 0) teamPicks.splice(i, 1);
+    else if (teamPicks.length < BALANCE.TEAM_SIZE) teamPicks.push(id);
+    else { SFX.back(); return; }
+    SFX.click();
+    renderTeamBuilder();
+}
+
+function bindTeamBuilder() {
+    if (EL["btn-team-back"]) {
+        EL["btn-team-back"].addEventListener("click", () => {
+            SFX.back();
+            openDex();
+        });
+    }
+    if (EL["btn-save-team"]) {
+        EL["btn-save-team"].addEventListener("click", () => {
+            if (teamPicks.length !== BALANCE.TEAM_SIZE) return;
+            SFX.select();
+            setTeam(teamPicks);
+            setStatus("Đã lưu team!");
+            setTimeout(() => openDex(), 300);
+        });
+    }
+}
+
+// ============================================================
+//  ROLL SCREEN (legacy)
+// ============================================================
+function enterRoll() {
+    if (!assetsReady) { setStatus("Đang tải thẻ, đợi chút..."); return; }
+    showScreen("roll");
 }
 
 // ============================================================
@@ -618,7 +839,15 @@ function bindRoll() {
 // ============================================================
 function enterPrep(id) {
     prepId = id || (isHost ? rndId() : prepId);
-    if (!picks) picks = [];
+
+    const savedTeam = getTeam().filter(x => x);
+    if (savedTeam.length < BALANCE.TEAM_SIZE) {
+        setStatus("Chưa build team — hãy build team trong Dex trước!");
+        openTeamBuilder();
+        return;
+    }
+    picks = savedTeam.slice();
+
     pendingTeam = [null, null]; forcedChoice = [null, null];
     pendingChoice = [null, null]; battleOver = false; myTurnReady = false; menuMode = "root";
     queue = []; busy = false; playbackRunning = false;
@@ -626,19 +855,20 @@ function enterPrep(id) {
     logLines = []; renderLog();
     showScreen("prep");
     renderPrep();
-    EL["btn-confirm-team"].disabled = picks.length < BALANCE.TEAM_SIZE;
-    const remaining = BALANCE.TEAM_SIZE - picks.length;
-    if (picks.length > 0 && remaining > 0) {
-        const names = picks.map(id => (MONSTER_INDEX[id] && MONSTER_INDEX[id].name) || id).join(", ");
-        EL["prep-status"].innerHTML = `Đã roll: <b style="color:#ffd75f">${names}</b><br>Chọn thêm <b>${remaining}</b> con nữa`;
-    } else {
-        EL["prep-status"].innerHTML = "Chọn đủ 3 quái để bắt đầu";
-    }
+    EL["btn-confirm-team"].disabled = false;
+    const names = picks.map(id => (MONSTER_INDEX[id] && MONSTER_INDEX[id].name) || id).join(", ");
+    EL["prep-status"].innerHTML = `Team từ Dex: <b style="color:#ffd75f">${names}</b>`;
     if (mode === "p2p" && isHost) sendAny({ type: "prep", prepId });
 }
-let rosterQuery = "";
 function renderPrep() {
-    Render.roster(EL["roster-grid"], picks, togglePick, rosterQuery);
+    const rosterEl = EL["roster-grid"];
+    if (rosterEl) {
+        rosterEl.innerHTML = picks.map(id => {
+            const m = getDexMonsterFull(id);
+            return m ? Render.card(m, { selected: true, holo: true }) : "";
+        }).join("");
+    }
+
     Render.teamSlots(EL["team-slots"], picks, id => { SFX.back(); togglePick(id); });
     Render.typeChart(EL["type-chart"]);
 
@@ -663,16 +893,12 @@ function togglePick(id) {
     }
 }
 function aiTeam() {
-    const rest = MONSTER_ROSTER.map(m => m.id).filter(id => picks.indexOf(id) < 0);
-    for (let i = rest.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        const t = rest[i]; rest[i] = rest[j]; rest[j] = t;
-    }
-    const need = BALANCE.TEAM_SIZE;
-    if (rest.length >= need) return rest.slice(0, need);
     const all = MONSTER_ROSTER.map(m => m.id);
-    while (rest.length < need) rest.push(all[Math.floor(Math.random() * all.length)]);
-    return rest.slice(0, need);
+    for (let i = all.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const t = all[i]; all[i] = all[j]; all[j] = t;
+    }
+    return all.slice(0, BALANCE.TEAM_SIZE);
 }
 function confirmTeam() {
     if (picks.length !== BALANCE.TEAM_SIZE) return;
@@ -696,7 +922,7 @@ function tryStartBattle() {
 }
 
 // ============================================================
-//  BATTLE — VIEW / RENDER
+//  BATTLE
 // ============================================================
 function viewSnap() {
     return [0, 1].map(s => ({
@@ -741,12 +967,14 @@ function renderHud(side) {
     const foe = M.teams[1 - side][M.active[1 - side]];
     const hp = Math.max(0, v.hp[v.active]);
     const adv = advInfo(f.type, foe.type);
-    const trainer = side === mySide
-        ? (profile.name || "BẠN")
-        : (mode === "ai" ? "MÁY TÍNH" : (oppName || "ĐỐI THỦ"));
+    let trainer;
+    if (side === mySide) trainer = profile.name || "BẠN";
+    else if (M && M.isWild) trainer = "QUÁI HOANG";
+    else if (mode === "ai") trainer = "MÁY TÍNH";
+    else trainer = oppName || "ĐỐI THỦ";
     Render.hud(pos, {
-        monster: f.name,
-        trainer: trainer + (side === mySide ? " · BẠN" : " · ĐỐI THỦ"),
+        monster: f.name + (f.level ? " Lv." + f.level : ""),
+        trainer: trainer + (side === mySide ? " · BẠN" : ""),
         typeKey: f.type,
         hp, maxHp: f.maxHp,
         shield: v.shield[v.active] || 0,
@@ -765,7 +993,6 @@ function renderSprites() {
 }
 function renderAll() { renderHud(0); renderHud(1); renderSprites(); }
 
-// ---------- MENU ----------
 function basicMove(f) {
     return {
         name: "Đòn Thường", kind: "attack", type: f.type, dmg: 40, cost: 0,
@@ -784,7 +1011,7 @@ function lockText() {
 }
 function menuSpec() {
     if (!M || battleOver || busy || M.phase !== "battle" || myTurnReady)
-        return { kind: "locked", text: lockText(), sub: mode === "ai" ? "AI đang tính..." : "Đang chờ đối thủ" };
+        return { kind: "locked", text: lockText(), sub: mode === "ai" ? "Đang tính..." : "Đang chờ đối thủ" };
 
     const f = M.teams[mySide][M.active[mySide]];
     const foe = M.teams[oppSide()][M.active[oppSide()]];
@@ -844,7 +1071,6 @@ function refreshMenu() {
     }));
 }
 
-// ---------- SWITCH ----------
 function openSwitch(kind) {
     switchKind = kind;
     EL["switch-title"].textContent = kind === "forced" ? "QUÁI ĐÃ GỤC — CHỌN THAY THẾ" : "ĐỔI BÀI";
@@ -876,9 +1102,6 @@ function closeAllOverlays(keepResult) {
     if (!keepResult && EL["ov-result"]) EL["ov-result"].classList.remove("show");
 }
 
-// ============================================================
-//  CHOICE / PROTOCOL
-// ============================================================
 function submitChoice(choice) {
     if (!M || busy || battleOver || M.phase !== "battle" || myTurnReady) return;
     if (choice.kind === "switch") {
@@ -891,8 +1114,10 @@ function submitChoice(choice) {
     menuMode = "root";
     pendingChoice[mySide] = choice;
     refreshMenu();
-    if (mode === "ai") {
-        setMsg("Bạn đã chọn. <b>Đối thủ đang suy nghĩ</b>...");
+
+    // ⭐ Wild battle: AI chọn ngay
+    if (mode === "ai" || (M && M.isWild)) {
+        setMsg("Bạn đã chọn. <b>Đang xử lý...</b>...");
         setTimeout(() => { pendingChoice[oppSide()] = aiChoose(oppSide()); tryAdvance(); }, 650);
     } else {
         send({ type: "choice", choice });
@@ -982,9 +1207,6 @@ function updateTurnBadge() {
     updateTurnBadge._t = setTimeout(() => b.classList.remove("show"), 1600);
 }
 
-// ============================================================
-//  RESOLVE (host)
-// ============================================================
 function aliveIdx(side) { return M.teams[side].map((f, i) => i).filter(i => !M.teams[side][i].fainted); }
 
 function tickStatus(f) {
@@ -1056,14 +1278,12 @@ function resolveTurn(ch0, ch1) {
             continue;
         }
 
-        // ===== HYBRID SKILL EXECUTION =====
         const hasDamage = move.dmg && move.dmg > 0;
         const hasShield = move.shield && move.shield > 0;
         const hasHeal = move.heal && move.heal > 0;
         const hasEffect = !!move.effect;
         const hasBuffSelf = !!move.buffSelf;
 
-        // 1) Damage
         if (hasDamage) {
             const ev = applyAttack(s, move);
             events.push(ev);
@@ -1071,7 +1291,6 @@ function resolveTurn(ch0, ch1) {
             if (ev.attackerFaint) events.push({ t: "faint", side: s, target: M.active[s] });
         }
 
-        // 2) Shield
         if (hasShield && !atkF.fainted) {
             atkF.shield += move.shield;
             atkF.shieldTurns = BALANCE.SHIELD_TURNS;
@@ -1083,14 +1302,12 @@ function resolveTurn(ch0, ch1) {
             });
         }
 
-        // 3) Heal
         if (hasHeal && !atkF.fainted) {
             const before = atkF.hp;
             atkF.hp = Math.min(atkF.maxHp, atkF.hp + move.heal);
             events.push({ t: "heal", side: s, moveName: move.name, amount: atkF.hp - before, hpAfter: atkF.hp });
         }
 
-        // 4) Buff self
         if (hasBuffSelf && !atkF.fainted) {
             const b = move.buffSelf;
             if (b.stat === "dmg") {
@@ -1104,7 +1321,6 @@ function resolveTurn(ch0, ch1) {
             }
         }
 
-        // 5) Effect on enemy khi không gây dmg
         if (hasEffect && !hasDamage) {
             const chance = (move.chance != null ? move.chance : 1);
             const success = Math.random() < chance;
@@ -1123,7 +1339,6 @@ function resolveTurn(ch0, ch1) {
             }
         }
 
-        // 6) Buff/Debuff stat cũ
         if (move.effect === "buff_atk" && !atkF.fainted) {
             atkF.buffAtk = (move.value || 0.2);
             atkF.buffAtkTurns = move.turns || 3;
@@ -1224,20 +1439,17 @@ function applyAttack(side, move) {
         const fixedResist = defF.resistFixed || 0;
         if (fixedResist > 0) dmg = Math.max(1, dmg - fixedResist);
 
-        // ⭐ PASSIVE: giảm sát thương nhận vào
         if (defF.damageReduction > 0) {
             const before = dmg;
             dmg = Math.max(1, Math.round(dmg * (1 - defF.damageReduction)));
             if (before !== dmg) passiveTriggered = true;
         }
 
-        // ⭐ PASSIVE: nhận thêm sát thương
         if (defF.extraDamageTaken > 0) {
             dmg += defF.extraDamageTaken;
             passiveTriggered = true;
         }
 
-        // ⭐ PASSIVE: energy_on_hit
         if (defF.passiveEffect === "energy_on_hit") {
             defF.energyBonus = (defF.energyBonus || 0) + 1;
         }
@@ -1327,7 +1539,7 @@ function applyAttack(side, move) {
 }
 
 // ============================================================
-//  VFX SYSTEM — Animation theo hệ
+//  VFX SYSTEM
 // ============================================================
 function getSceneRect(side) {
     const scene = EL.scene;
@@ -1485,7 +1697,16 @@ async function runTurn(events) {
         refreshMenu();
     }
 
-    if (M.phase === "end") { closeAllOverlays(true); showResult(); return; }
+    if (M.phase === "end") {
+        closeAllOverlays(true);
+        // ⭐ Nếu là wild battle → chuyển sang màn capture
+        if (M && M.isWild) {
+            onWildBattleEnd();
+        } else {
+            showResult();
+        }
+        return;
+    }
 
     if (M.phase === "forced") {
         if (M.needSwitch[mySide]) {
@@ -1502,7 +1723,7 @@ async function runTurn(events) {
     startTurn();
 }
 function scheduleForcedAI() {
-    if (mode === "ai" && M.needSwitch[oppSide()]) {
+    if ((mode === "ai" || (M && M.isWild)) && M.needSwitch[oppSide()]) {
         setTimeout(() => {
             if (M && M.needSwitch[oppSide()]) {
                 forcedChoice[oppSide()] = aiPickSwitch(oppSide(), null, true);
@@ -1594,7 +1815,6 @@ async function playAttack(ev) {
     await sleep(230);
 
     SFX.shoot();
-    // VFX theo hệ — hiện tại vị trí defender
     playTypeVFX(ev.move.type, ev.targetSide);
     if (ev.move.kind === "attack") await shoot(atkEl, defEl, T.color);
     await sleep(170);
@@ -1609,7 +1829,6 @@ async function playAttack(ev) {
     if (ev.dmg > 0) popupAt(ev.targetSide, "-" + ev.dmg + (ev.hits > 1 ? " x" + ev.hits : ""), ev.crit ? "crit" : "");
     if (ev.crit) popupAt(ev.targetSide, "CRIT!", "crit");
 
-    // Passive VFX
     if (ev.passiveTriggered && ev.defId) {
         playPassiveVFX(ev.targetSide, ev.defId);
         SFX.passive();
@@ -1793,7 +2012,6 @@ async function playEffectMiss(ev) {
     await sleep(300);
 }
 
-// ---------- VFX BASIC ----------
 function popupAt(side, text, cls) {
     const el = spriteOf(side), scene = EL.scene;
     if (!el || !scene) return;
@@ -1921,13 +2139,19 @@ function enterBattle(state) {
     updateTurnBadge();
     const mine = M.teams[mySide][M.active[mySide]].name;
     const theirs = M.teams[oppSide()][M.active[oppSide()]].name;
-    banner("TRẬN ĐẤU BẮT ĐẦU");
+    if (M.isWild) banner("QUÁI HOANG XUẤT HIỆN!");
+    else banner("TRẬN ĐẤU BẮT ĐẦU");
     (async () => {
         await sleep(650);
-        await say([tag(mySide), { text: ` tung ra ${mine}! ` }, tag(oppSide()), { text: ` tung ra ${theirs}!` }]);
+        if (M.isWild) {
+            await say([tag(mySide), { text: ` tung ra ${mine}! ` }, { text: `${theirs} xuất hiện!`, style: "color:#ff8fa3;font-weight:800" }]);
+        } else {
+            await say([tag(mySide), { text: ` tung ra ${mine}! ` }, tag(oppSide()), { text: ` tung ra ${theirs}!` }]);
+        }
         startTurn();
     })();
 }
+
 function showResult() {
     battleOver = true;
     const draw = M.winner === "draw";
@@ -1936,17 +2160,322 @@ function showResult() {
     if (draw) { t.textContent = "HÒA!"; t.classList.remove("lose"); s.textContent = "Cả hai cùng gục — không ai giành chiến thắng."; }
     else if (win) { t.textContent = "CHIẾN THẮNG!"; t.classList.remove("lose"); s.textContent = "Đội hình của bạn đã hạ gục toàn bộ đối thủ."; SFX.win(); }
     else { t.textContent = "THUA RỒI..."; t.classList.add("lose"); s.textContent = "Đội hình của bạn đã gục hết — thử đổi chiến thuật nhé!"; SFX.lose(); }
+    // Reset buttons
+    const btnRematch = EL["btn-rematch"];
+    const btnHome = EL["btn-home"];
+    btnRematch.textContent = "⚔️ Đấu lại";
+    btnHome.textContent = "Về sảnh";
     setTimeout(() => { EL["ov-result"].classList.add("show"); SFX.select(); }, 700);
 }
 function requestRematch() {
     EL["ov-result"].classList.remove("show");
-    if (mode === "ai") { enterRoll(); return; }
+    if (mode === "ai") { enterPrep(); return; }
     if (mode === "p2p") {
-        if (isHost) { enterRoll(); broadcast({ type: "roll" }); }
+        if (isHost) { enterPrep(rndId()); broadcast({ type: "prep", prepId }); }
         else { send({ type: "rematchReq" }); setStatus("Đợi đối thủ muốn đấu lại..."); }
         return;
     }
-    enterRoll();
+    enterPrep();
+}
+
+// ============================================================
+//  WILD BATTLE END — hiện capture screen
+// ============================================================
+function onWildBattleEnd() {
+    if (!M || !M.isWild) return;
+    const win = M.winner === mySide;
+    const wild = M.wild;
+
+    if (!win) {
+        // Thua → result thường
+        showResult();
+        return;
+    }
+
+    // Thắng → hiện overlay capture
+    const zone = WORLD_ZONES.find(z => z.id === M.zoneId);
+    const alreadyOwned = DEX.monsters[wild.id];
+    const captureRate = calcCaptureRate(wild.hp, wild.maxHp, zone ? zone.captureBaseRate : 0.3, true);
+
+    setTimeout(() => {
+        const t = EL["result-title"];
+        const s = EL["result-sub"];
+        t.textContent = "CHIẾN THẮNG!";
+        t.classList.remove("lose");
+        s.innerHTML = `
+            <div style="margin-bottom:10px;font-size:1.1rem">
+                <b style="color:#ffd75f">${wild.name}</b> Lv.${wild.level} đã gục!
+            </div>
+            <div style="margin-bottom:16px">
+                HP còn: <b>${Math.max(0, wild.hp)}/${wild.maxHp}</b> ·
+                Tỉ lệ bắt: <b style="color:#4ade80">${Math.round(captureRate * 100)}%</b>
+            </div>
+            ${alreadyOwned ? '<div style="color:#9aa3d0;font-size:.85rem">Đã có trong Dex → bắt sẽ +30 EXP cho nó</div>' : ''}
+        `;
+
+        const btnRematch = EL["btn-rematch"];
+        btnRematch.textContent = "🔴 BẮT";
+        btnRematch.onclick = () => {
+            EL["ov-result"].classList.remove("show");
+            attemptWildCapture();
+        };
+
+        const btnHome = EL["btn-home"];
+        btnHome.textContent = "💨 BỎ QUA";
+        btnHome.onclick = () => {
+            EL["ov-result"].classList.remove("show");
+            finishWildBattle(false);
+        };
+
+        EL["ov-result"].classList.add("show");
+        SFX.win();
+    }, 700);
+}
+
+async function attemptWildCapture() {
+    if (!M || !M.isWild) return;
+    const wild = M.wild;
+    const zone = WORLD_ZONES.find(z => z.id === M.zoneId);
+
+    // Animation
+    banner("🔴 NÉM BÓNG...");
+    SFX.select();
+    await sleep(700);
+
+    const result = tryCapture(wild, M.zoneId, true);
+
+    if (result.success) {
+        SFX.capture();
+        banner("✨ BẮT THÀNH CÔNG!");
+        await sleep(1100);
+        finishWildBattle(true);
+    } else {
+        SFX.back();
+        banner("💨 QUÁI THOÁT RA!");
+        await sleep(1100);
+        finishWildBattle(false);
+    }
+}
+
+async function finishWildBattle(wasCaptured) {
+    if (!M || !M.isWild) return;
+    const wild = M.wild;
+    const zoneId = M.zoneId;
+
+    const rewards = handleWildWin(zoneId, wild, wasCaptured);
+    pendingWildRewards = rewards;
+
+    // Lưu ID wild trước khi clear M
+    const wildId = wild.id;
+    const wildName = wild.name;
+
+    // Clear state
+    M = null;
+    wildState = null;
+
+    // Hiện level up banner
+    if (rewards.levelUps && rewards.levelUps.length) {
+        for (const lu of rewards.levelUps) {
+            const mon = MONSTER_INDEX[lu.id];
+            if (mon) showLevelUpBanner(mon.name, lu.newLevel);
+            await sleep(500);
+        }
+    }
+
+    await sleep(400);
+    showWildResultFinal(wasCaptured, rewards, wildName);
+}
+
+function showWildResultFinal(wasCaptured, rewards, wildName) {
+    const overlay = EL["ov-wild-result"];
+    const title = EL["wild-result-title"];
+    const body = EL["wild-result-body"];
+    if (!overlay || !title || !body) return;
+
+    title.textContent = wasCaptured ? "BẮT ĐƯỢC QUÁI!" : "CHIẾN THẮNG!";
+    title.classList.remove("lose");
+
+    let html = "";
+    if (wasCaptured && rewards.isNew) {
+        html += `<div class="wild-result-row new-capture">🎉 <b>${wildName}</b> đã vào Dex của bạn!</div>`;
+    } else if (rewards.duplicate) {
+        html += `<div class="wild-result-row">📖 Đã có <b>${wildName}</b> → +30 EXP</div>`;
+    } else if (!wasCaptured) {
+        html += `<div class="wild-result-row">💨 Bỏ qua <b>${wildName}</b></div>`;
+    }
+    html += `<div class="wild-result-row">💰 Coins <b>+${rewards.coins}</b></div>`;
+    html += `<div class="wild-result-row">⭐ EXP mỗi quái <b>+${rewards.expPerMonster}</b></div>`;
+
+    if (rewards.levelUps && rewards.levelUps.length) {
+        rewards.levelUps.forEach(lu => {
+            const mon = MONSTER_INDEX[lu.id];
+            html += `<div class="wild-result-row new-capture">⬆️ <b>${mon.name}</b> lên Lv.${lu.newLevel}!</div>`;
+        });
+    }
+
+    body.innerHTML = html;
+    overlay.classList.add("show");
+}
+
+// ============================================================
+//  WORLD MAP
+// ============================================================
+function openWorldMap() {
+    if (typeof initDex === "function") initDex();
+    if (typeof WORLD_ZONES === "undefined") {
+        setStatus("World chưa load — kiểm tra world.js!");
+        return;
+    }
+    // Reset HP team
+    const team = getTeam().filter(x => x);
+    team.forEach(id => {
+        if (DEX.monsters[id]) {
+            const full = getDexMonsterFull(id);
+            DEX.monsters[id].hp = full.maxHp;
+        }
+    });
+    saveDex();
+    showScreen("world");
+    renderWorldMap();
+}
+
+function renderWorldMap() {
+    if (typeof DEX === "undefined" || !DEX) return;
+    if (typeof WORLD_ZONES === "undefined") return;
+
+    const playerLevel = getPlayerLevel();
+    if (EL["world-player-level"]) EL["world-player-level"].textContent = playerLevel;
+    if (EL["world-coins"]) EL["world-coins"].textContent = DEX.currency.coins;
+    if (EL["world-dex-count"]) EL["world-dex-count"].textContent = getOwnedIds().length;
+    if (EL["world-dex-total"]) EL["world-dex-total"].textContent = MONSTER_ROSTER.length;
+
+    const map = EL["world-map"];
+    if (!map) return;
+
+    map.innerHTML = WORLD_ZONES.map(z => {
+        const unlocked = isZoneUnlocked(z.id);
+        const lockHTML = unlocked ? "" : `
+            <div class="zone-lock">
+                <div class="zone-lock-icon">🔒</div>
+                <div class="zone-lock-text">Cần Lv.${z.unlockLevel} để mở<br>(Bạn: Lv.${playerLevel})</div>
+            </div>`;
+        return `
+            <div class="zone-card ${unlocked ? "" : "locked"}" data-zone="${z.id}" style="background:${z.bg}">
+                ${lockHTML}
+                <div>
+                    <div class="zone-icon">${z.icon}</div>
+                    <div class="zone-name">${z.name}</div>
+                    <div class="zone-desc">${z.desc}</div>
+                </div>
+                <div class="zone-info">
+                    <span class="zone-badge lv">Lv.${z.minLevel}-${z.maxLevel}</span>
+                    <span class="zone-badge">💰 ${z.reward.coins}</span>
+                    <span class="zone-badge">⭐ ${z.reward.exp} EXP</span>
+                </div>
+            </div>`;
+    }).join("");
+
+    map.querySelectorAll(".zone-card").forEach(card => {
+        card.addEventListener("click", () => {
+            const zid = card.dataset.zone;
+            if (!isZoneUnlocked(zid)) {
+                SFX.back();
+                setStatus("Vùng này cần level cao hơn!");
+                return;
+            }
+            SFX.select();
+            enterZone(zid);
+        });
+    });
+}
+
+// ⭐ Vào zone — build state M giống battle thường
+function enterZone(zoneId) {
+    const zone = WORLD_ZONES.find(z => z.id === zoneId);
+    if (!zone) return;
+
+    const wild = rollWildMonster(zoneId);
+    if (!wild) return;
+
+    const team = getTeam().filter(x => x);
+    if (team.length < 1) {
+        setStatus("Chưa có quái — hãy build team!");
+        return;
+    }
+
+    // Reset HP team
+    team.forEach(id => {
+        if (DEX.monsters[id]) {
+            const full = getDexMonsterFull(id);
+            DEX.monsters[id].hp = full.maxHp;
+        }
+    });
+
+    // ⭐ Build wild fighter
+    const wildFighter = makeWildFighter(wild);
+
+    // ⭐ Setup state M giống battle thường
+    M = {
+        phase: "battle",
+        turn: 1,
+        winner: null,
+        active: [0, 0],
+        needSwitch: [false, false],
+        teams: [
+            team.map(id => makeFighter(id)),
+            [wildFighter]
+        ],
+        isWild: true,
+        wild: wild,
+        zoneId: zoneId,
+        zone: zone
+    };
+
+    wildState = { zoneId, zone, wild };
+
+    mode = "ai";
+    mySide = 0;
+    isHost = true;
+
+    // ⭐ Gọi enterBattle luôn
+    enterBattle(M);
+}
+
+// ⭐ Tạo fighter từ wild monster
+function makeWildFighter(wild) {
+    const base = MONSTER_INDEX[wild.id];
+    if (!base) return null;
+    return {
+        id: base.id,
+        name: base.name,
+        subtitle: base.subtitle,
+        type: base.type,
+        hp: wild.hp,
+        maxHp: wild.maxHp,
+        spd: wild.spd,
+        rarity: base.rarity,
+        art: base.art,
+        flavor: base.flavor,
+        dex: base.dex,
+        resistFixed: base.resistFixed || 0,
+        level: wild.level,
+        moves: wild.moves.map(m => ({ ...m, currentPp: m.pp || 99 })),
+        shield: 0, shieldTurns: 0,
+        exposeTurns: 0,
+        stunTurns: 0, freezeTurns: 0, paralyzeTurns: 0, confuseTurns: 0,
+        buffAtk: 0, buffAtkTurns: 0,
+        buffDef: 0, buffDefTurns: 0,
+        debuffAtk: 0, debuffAtkTurns: 0,
+        debuffDef: 0, debuffDefTurns: 0,
+        reflect: 0,
+        dot: null,
+        fainted: false,
+        energyBonus: 0,
+        damageReduction: base.moves.find(m => m.damageReduction)?.damageReduction || 0,
+        extraDamageTaken: base.moves.find(m => m.extraDamageTaken)?.extraDamageTaken || 0,
+        passiveEffect: base.moves.find(m => m.passiveEffect)?.passiveEffect || null,
+        isWild: true
+    };
 }
 
 // ============================================================
@@ -1961,14 +2490,46 @@ function bindBattle() {
         EL["btn-mute"].textContent = SFX.muted ? "🔇" : "🔊";
         SFX.click();
     });
-    EL["btn-rematch"].addEventListener("click", () => { SFX.select(); requestRematch(); });
-    EL["btn-home"].addEventListener("click", () => location.reload());
+    EL["btn-rematch"].addEventListener("click", () => {
+        // Nếu đang là wild battle → đã handle riêng
+        if (M && M.isWild) return;
+        SFX.select();
+        requestRematch();
+    });
+    EL["btn-home"].addEventListener("click", () => {
+        // Nếu đang là wild battle → đã handle riêng
+        if (M && M.isWild) return;
+        location.reload();
+    });
 }
 function bindPrep() {
     EL["btn-confirm-team"].addEventListener("click", confirmTeam);
     EL["btn-prep-back"].addEventListener("click", () => { SFX.back(); location.reload(); });
     const rs = $("roster-search");
     if (rs) rs.addEventListener("input", () => { rosterQuery = rs.value; renderPrep(); });
+}
+
+function bindWorld() {
+    if (EL["btn-world-back"]) {
+        EL["btn-world-back"].addEventListener("click", () => {
+            SFX.back();
+            showScreen("lobby");
+        });
+    }
+    if (EL["btn-wild-continue"]) {
+        EL["btn-wild-continue"].addEventListener("click", () => {
+            SFX.click();
+            EL["ov-wild-result"].classList.remove("show");
+            openWorldMap();
+        });
+    }
+    if (EL["btn-wild-home"]) {
+        EL["btn-wild-home"].addEventListener("click", () => {
+            SFX.click();
+            EL["ov-wild-result"].classList.remove("show");
+            showScreen("lobby");
+        });
+    }
 }
 
 function applyDebugHooks() {
@@ -1987,7 +2548,7 @@ function applyDebugHooks() {
                 pending: pendingChoice, forced: forcedChoice, myTurnReady, menuMode, autoPlay,
                 needSwitch: M && M.needSwitch, active: M && M.active, teamLens: M && M.teams.map(t => t.length),
                 hp: M && M.teams.map(t => t.map(f => f.hp)),
-                rollCount: rollMonsters.length, rollPicked: rollPickedIdx
+                dexOwned: typeof DEX !== "undefined" && DEX ? getOwnedIds().length : 0
             };
             const pre = document.createElement("pre");
             pre.id = "debug-out";
@@ -1995,49 +2556,48 @@ function applyDebugHooks() {
             document.body.appendChild(pre);
         }, delay);
     }
-
-    const wantDemo = hash.indexOf("demo") >= 0 || !!q.get("demo");
-    if (wantDemo) {
-        autoPlay = !!(q.get("autoplay") || hash.indexOf("autoplay") >= 0);
-        mode = "ai"; isHost = true; mySide = 0;
-        enterRoll();
-        setTimeout(() => {
-            if (rollMonsters.length && q.get("prep") !== "1") {
-                rollPickedIdx = 0;
-                picks = [rollMonsters[0].id];
-                const others = MONSTER_ROSTER.filter(m => m.id !== picks[0]).slice(0, 2);
-                others.forEach(m => picks.push(m.id));
-                enterPrep();
-                if (q.get("prep") !== "1") {
-                    setTimeout(() => confirmTeam(), 500);
-                }
-            }
-        }, 300);
-    }
 }
 
 function boot() {
-    bindLobby(); bindRoll(); bindPrep(); bindBattle();
+    // ⭐ INIT DEX FIRST
+    if (typeof initDex === "function") {
+        try { initDex(); } catch (e) { console.error("[boot] initDex failed:", e); }
+    }
+
+    // Bind UI
+    bindLobby();
+    bindPrep();
+    bindBattle();
+    bindDex();
+    bindTeamBuilder();
+    bindWorld();
+
     window.__onSpritesReady = () => {
         if (currentScreen === "lobby") renderLobbyFan();
-        if (currentScreen === "roll") renderRoll(false);
+        if (currentScreen === "dex") renderDex();
+        if (currentScreen === "team") renderTeamBuilder();
         if (currentScreen === "prep") renderPrep();
+        if (currentScreen === "world") renderWorldMap();
         if (currentScreen === "battle" && M) {
             renderSprites();
             renderHud(0); renderHud(1);
         }
     };
+
     if (typeof initAssets === "function") {
         initAssets(MONSTER_INDEX);
     }
+
     renderTrainerCard();
     renderLobbyFan();
     renderFriends("");
     setStatus("Đang tải thẻ...");
     applyDebugHooks();
+
     setTimeout(() => {
         assetsReady = true;
-        setStatus("Xin chào " + (profile.name || "huấn luyện viên") + "! Mã đăng ký: " + profile.code);
+        const owned = (typeof DEX !== "undefined" && DEX) ? getOwnedIds().length : 0;
+        setStatus(`Xin chào ${profile.name || "huấn luyện viên"}! Đã sở hữu ${owned} quái.`);
     }, 1500);
 }
 if (typeof document !== "undefined") {
